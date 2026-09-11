@@ -1,0 +1,1063 @@
+/* =====================================================================
+   Procedural sprite animation clips. One class per AnimationName:
+   anim-idle anim-walk anim-run anim-sit anim-sleep anim-eat anim-drink anim-play anim-jump
+   anim-stretch anim-happy anim-sad anim-curious anim-angry anim-excited anim-scared anim-dance
+   anim-groom anim-bathe anim-tired anim-hide anim-watch anim-dragged anim-fall
+
+   Performance model (measured on a transparent full-screen window, see README):
+   - every compositor frame costs real CPU, so the number of visual updates per second is what we
+     budget, not the amount of work per update;
+   - always-on idle motion is written by PetRuntime at ~8Hz: breathing and tail sway as inline
+     transforms on .body/.tail .idle-motion, and --blink --ear --look-x --look-y on the .head layer
+     (never on the root: an inherited variable change there repaints every layer);
+   - state loops below are CSS keyframes with steps(), capping them at ~10-25 updates a second;
+   - every animated part is an absolutely positioned <div> (composited transform); nothing inside an
+     SVG is animated continuously.
+   ===================================================================== */
+
+.sprite-wrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transform-origin: 50% 100%;
+  transition: transform 0.14s ease, opacity 0.4s ease;
+}
+.sprite-wrap .part {
+  position: absolute;
+  inset: 0;
+  will-change: transform;
+  transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s;
+}
+.sprite-wrap .part > svg,
+.sprite-wrap .part > .part,
+.sprite-wrap .idle-motion,
+.sprite-wrap .idle-motion > svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  display: block;
+}
+.sprite-wrap .idle-motion {
+  will-change: transform;
+}
+.shadow-layer .shadow {
+  fill: rgba(0, 0, 0, 0.22);
+}
+.shadow-layer {
+  transition: transform 0.2s, opacity 0.2s;
+  transform-origin: 51.6% 94.5%;
+}
+
+/* origins (percent of the 120x110 box) */
+.torso {
+  transform-origin: 50% 81.8%;
+}
+.body,
+.body .idle-motion {
+  transform-origin: 50% 63.6%;
+}
+/* .body .idle-motion and .tail .idle-motion get inline transforms from PetRuntime (breathe / sway) */
+.head {
+  transform-origin: 70% 56.4%;
+}
+.upright .head {
+  transform-origin: 53.3% 50.9%;
+}
+.tail,
+.tail .idle-motion {
+  transform-origin: 25% 60%;
+}
+.leg {
+  transform-origin: 34.6% 72.7%;
+}
+.leg.back.b {
+  transform-origin: 43.75% 72.7%;
+}
+.leg.front.a {
+  transform-origin: 62.9% 72.7%;
+}
+.leg.front.b {
+  transform-origin: 72.9% 72.7%;
+}
+.upright .leg.back.a {
+  transform-origin: 45% 92.7%;
+}
+.upright .leg.back.b {
+  transform-origin: 58.3% 92.7%;
+}
+.upright .leg.front.a {
+  transform-origin: 33.3% 60%;
+}
+.upright .leg.front.b {
+  transform-origin: 70% 60%;
+}
+.ball {
+  opacity: 0;
+  transform-origin: 90% 88%;
+}
+
+/* details inside the head SVG, driven by variables so they repaint only when a value changes */
+.ear {
+  transform-origin: 50% 100%;
+  transform-box: fill-box;
+  transition: transform 0.35s;
+}
+.ear.left {
+  transform: rotate(var(--ear, 0deg));
+  transition: transform 0.12s;
+}
+.lid {
+  transform-origin: 50% 0%;
+  transform-box: fill-box;
+  transform: scaleY(var(--blink, 0));
+}
+.pupil,
+.pupil-shine {
+  transform: translate(calc(var(--look-x, 0) * 2.4px), calc(var(--look-y, 0) * 1.8px));
+  transition: transform 0.15s ease;
+}
+.brow,
+.tongue,
+.props .bowl,
+.props .puddle,
+.props .splash {
+  opacity: 0;
+  transition: opacity 0.25s;
+}
+.blush {
+  transition: opacity 0.3s;
+}
+.zzz {
+  position: absolute;
+  left: 78%;
+  top: 30%;
+  opacity: 0;
+  color: #cfd6ff;
+  font-weight: 700;
+  font-family: system-ui, sans-serif;
+  pointer-events: none;
+  transition: opacity 0.3s;
+}
+.zzz .z {
+  position: absolute;
+  opacity: 0;
+  will-change: transform, opacity;
+}
+.z1 {
+  left: 0;
+  top: 8px;
+  font-size: 10px;
+}
+.z2 {
+  left: 8px;
+  top: -2px;
+  font-size: 13px;
+}
+.z3 {
+  left: 16px;
+  top: -14px;
+  font-size: 16px;
+}
+
+/* ----- archetype specifics ----- */
+/* Transform origins for legs/head/tail/torso are set inline per species by PetSprite (they depend
+   on body geometry); the rules below only handle poses and loops that differ between archetypes. */
+.wing {
+  transform-origin: 43% 50%;
+}
+.anim-excited .wing,
+.anim-happy .wing,
+.anim-run .wing,
+.anim-jump .wing,
+.anim-dance .wing,
+.anim-fall .wing {
+  animation: flap 0.36s steps(6) infinite;
+}
+@keyframes flap {
+  0%,
+  100% {
+    transform: rotate(-4deg);
+  }
+  50% {
+    transform: rotate(-38deg) translateY(-4%);
+  }
+}
+.upright.anim-excited .leg.front.arm,
+.upright.anim-happy .leg.front.arm,
+.upright.anim-dance .leg.front.arm,
+.upright.anim-fall .leg.front.arm {
+  animation: arm-flap 0.32s steps(6) infinite;
+}
+.upright.anim-excited .leg.front.b,
+.upright.anim-happy .leg.front.b,
+.upright.anim-dance .leg.front.b {
+  animation-delay: -0.16s;
+}
+@keyframes arm-flap {
+  0%,
+  100% {
+    transform: rotate(-22deg);
+  }
+  50% {
+    transform: rotate(22deg);
+  }
+}
+.upright .leg.back {
+  transform: none;
+}
+.upright.anim-sit .torso {
+  transform: translateY(5%) scaleY(0.92);
+}
+.upright.anim-sleep .leg.back,
+.upright.anim-groom .leg.back,
+.upright.anim-jump .leg.back {
+  transform: none;
+}
+.face-swan.anim-sleep .head {
+  transform: rotate(40deg) translate(-10%, 6%);
+}
+.face-swan.anim-groom .head {
+  animation: swan-preen 0.9s steps(12) infinite;
+}
+@keyframes swan-preen {
+  0%,
+  100% {
+    transform: rotate(60deg) translate(-16%, 4%);
+  }
+  50% {
+    transform: rotate(72deg) translate(-18%, 6%);
+  }
+}
+
+/* human: arms are .leg.front, legs are .leg.back. Props swap to a sandwich / coffee / book. */
+.human .ball,
+.human .props .bowl,
+.human .props .puddle {
+  display: none;
+}
+.props .snack,
+.props .cup,
+.props .book {
+  opacity: 0;
+  transition: opacity 0.25s;
+}
+.human.anim-eat .props .snack,
+.human.anim-drink .props .cup,
+.human.anim-play .props .book {
+  opacity: 1;
+}
+.human.anim-walk .leg.front.a,
+.human.anim-run .leg.front.a {
+  animation-delay: -0.275s;
+}
+.human.anim-walk .leg.front.b,
+.human.anim-run .leg.front.b {
+  animation-delay: 0s;
+}
+.human.anim-run .leg.front.a {
+  animation-delay: -0.15s;
+}
+.human.anim-sit .torso {
+  transform: translateY(16%);
+}
+.human.anim-sit .leg.back {
+  transform: rotate(-82deg) translate(-6%, 8%);
+}
+.human.anim-sit .leg.front {
+  transform: rotate(-40deg);
+}
+.human.anim-sit .head {
+  transform: none;
+}
+.human.anim-sleep .torso {
+  transform: translateY(14%) rotate(-10deg);
+}
+.human.anim-sleep .leg.back {
+  transform: rotate(-70deg) translate(-4%, 8%);
+}
+.human.anim-sleep .leg.front {
+  transform: rotate(-30deg);
+}
+.human.anim-sleep .head {
+  transform: rotate(28deg) translate(6%, 6%);
+}
+.human.anim-eat .leg.front.b,
+.human.anim-drink .leg.front.b {
+  animation: sip 1.4s steps(10) infinite;
+}
+@keyframes sip {
+  0%,
+  100% {
+    transform: rotate(-40deg);
+  }
+  50% {
+    transform: rotate(-130deg) translate(4%, 0);
+  }
+}
+.human.anim-eat .head,
+.human.anim-drink .head {
+  animation: none;
+  transform: rotate(6deg);
+}
+.human.anim-play .leg.front {
+  transform: rotate(-70deg);
+}
+.human.anim-play .torso {
+  animation: none;
+  transform: translateY(2%);
+}
+.human.anim-stretch .leg.front.a {
+  transform: rotate(-165deg);
+}
+.human.anim-stretch .leg.front.b {
+  transform: rotate(165deg);
+}
+.human.anim-stretch .head {
+  transform: rotate(-6deg) translateY(-3%);
+}
+.human.anim-happy .leg.front.b,
+.human.anim-excited .leg.front.b,
+.human.anim-celebrating .leg.front.b {
+  animation: wave 0.5s steps(6) infinite;
+}
+.human.anim-excited .leg.front.a {
+  animation: wave 0.5s steps(6) infinite -0.25s;
+}
+@keyframes wave {
+  0%,
+  100% {
+    transform: rotate(150deg);
+  }
+  50% {
+    transform: rotate(185deg);
+  }
+}
+.human.anim-dance .leg.front.a {
+  animation: wave 0.45s steps(8) infinite;
+}
+.human.anim-dance .leg.front.b {
+  animation: wave 0.45s steps(8) infinite -0.225s;
+}
+.human.anim-jump .leg.back {
+  transform: rotate(0) scaleY(0.9);
+}
+.human.anim-jump .leg.front {
+  transform: rotate(160deg);
+}
+.human.anim-curious .head {
+  animation: head-tilt 1.8s steps(20) infinite;
+}
+.human.anim-sad .head {
+  transform: rotate(10deg) translateY(6%);
+}
+.human.anim-sad .leg.front {
+  transform: rotate(0);
+}
+.human.anim-scared .leg.front {
+  transform: rotate(150deg);
+}
+.human.anim-angry .leg.front {
+  transform: rotate(-110deg) translate(6%, 0);
+}
+.human.anim-tired .leg.front.b {
+  transform: rotate(-150deg);
+}
+.human.anim-watch .head {
+  transform: rotate(-3deg) translateY(-2%);
+}
+.human.anim-dragged .leg {
+  animation: dangle 0.8s steps(14) infinite;
+}
+.human.anim-hide .torso {
+  transform: translateY(9%) scaleY(0.85);
+}
+
+/* dashboard previews: no runtime drives --breathe there, so use a slow stepped CSS breathe */
+.preview .body .idle-motion {
+  animation: preview-breathe 3.4s steps(10) infinite;
+}
+@keyframes preview-breathe {
+  0%,
+  100% {
+    transform: scale(1, 1);
+  }
+  50% {
+    transform: scale(1.015, 1.045);
+  }
+}
+
+/* ----- keyframes (all loops stepped) ----- */
+@keyframes leg-swing {
+  0%,
+  100% {
+    transform: rotate(-20deg);
+  }
+  50% {
+    transform: rotate(20deg);
+  }
+}
+@keyframes bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-2.3%);
+  }
+}
+@keyframes run-bob {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-5deg);
+  }
+  50% {
+    transform: translateY(-5.5%) rotate(-5deg);
+  }
+}
+@keyframes hop {
+  0%,
+  100% {
+    transform: translateY(0) scale(1.06, 0.94);
+  }
+  45% {
+    transform: translateY(-12%) scale(0.96, 1.06);
+  }
+}
+@keyframes waddle {
+  0%,
+  100% {
+    transform: rotate(-6deg) translateY(0);
+  }
+  50% {
+    transform: rotate(6deg) translateY(-2%);
+  }
+}
+@keyframes waddle-step {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3.6%);
+  }
+}
+@keyframes peck {
+  0%,
+  100% {
+    transform: rotate(0);
+  }
+  50% {
+    transform: rotate(24deg) translate(1.6%, 5.5%);
+  }
+}
+@keyframes play-bounce {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-6deg);
+  }
+  50% {
+    transform: translateY(-8%) rotate(6deg);
+  }
+}
+@keyframes ball-bounce {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-15%);
+  }
+}
+@keyframes jump-squash {
+  0% {
+    transform: scale(1.15, 0.85);
+  }
+  25% {
+    transform: scale(0.92, 1.1);
+  }
+  70% {
+    transform: scale(0.96, 1.04);
+  }
+  100% {
+    transform: scale(1, 1);
+  }
+}
+@keyframes stretch {
+  0%,
+  100% {
+    transform: none;
+  }
+  35%,
+  65% {
+    transform: scaleX(1.2) rotate(7deg) translate(-5%, 2%);
+  }
+}
+@keyframes happy-hop {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-5.5%);
+  }
+}
+@keyframes head-tilt {
+  0%,
+  100% {
+    transform: rotate(-12deg);
+  }
+  50% {
+    transform: rotate(9deg);
+  }
+}
+@keyframes shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-2%);
+  }
+  75% {
+    transform: translateX(2%);
+  }
+}
+@keyframes excited {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-4deg);
+  }
+  50% {
+    transform: translateY(-7%) rotate(4deg);
+  }
+}
+@keyframes scared {
+  0% {
+    transform: none;
+  }
+  15% {
+    transform: translate(-10%, -11%) scale(1.06, 0.9);
+  }
+  40% {
+    transform: translate(-7%, 0) scale(0.94, 1.06);
+  }
+  100% {
+    transform: none;
+  }
+}
+@keyframes dance {
+  from {
+    transform: rotate(-14deg) translateX(-4%);
+  }
+  to {
+    transform: rotate(14deg) translateX(4%);
+  }
+}
+@keyframes groom {
+  0%,
+  100% {
+    transform: rotate(38deg) translate(-13%, 13%);
+  }
+  50% {
+    transform: rotate(46deg) translate(-15%, 15%);
+  }
+}
+@keyframes shake-slow {
+  0%,
+  100% {
+    transform: rotate(-4deg);
+  }
+  50% {
+    transform: rotate(4deg);
+  }
+}
+@keyframes dangle {
+  0%,
+  100% {
+    transform: rotate(-12deg);
+  }
+  50% {
+    transform: rotate(12deg);
+  }
+}
+@keyframes zfloat {
+  0% {
+    opacity: 0;
+    transform: translate(0, 4px);
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(6px, -14px);
+  }
+}
+@keyframes splash {
+  0%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  50% {
+    transform: translateY(-10px);
+    opacity: 1;
+  }
+}
+@keyframes sway-slow {
+  0%,
+  100% {
+    transform: rotate(-3deg);
+  }
+  50% {
+    transform: rotate(3deg);
+  }
+}
+
+/* ----- locomotion ----- */
+.anim-walk .leg.a,
+.anim-run .leg.a {
+  animation: leg-swing 0.55s steps(12) infinite;
+}
+.anim-walk .leg.b,
+.anim-run .leg.b {
+  animation: leg-swing 0.55s steps(12) infinite -0.275s;
+}
+.anim-walk .torso {
+  animation: bob 0.55s steps(12) infinite;
+}
+.anim-run .leg.a,
+.anim-run .leg.b {
+  animation-duration: 0.3s;
+  animation-timing-function: steps(8);
+}
+.anim-run .torso {
+  animation: run-bob 0.3s steps(8) infinite;
+}
+.anim-run .ear {
+  transform: rotate(-20deg);
+}
+
+/* gait variants */
+.gait-prowl.anim-walk .leg.a,
+.gait-prowl.anim-walk .leg.b {
+  animation-duration: 0.7s;
+}
+.gait-prowl.anim-walk .torso {
+  animation: bob 0.7s steps(12) infinite;
+}
+.gait-hop.anim-walk .leg,
+.gait-hop.anim-run .leg {
+  animation: none;
+}
+.gait-hop.anim-walk .torso {
+  animation: hop 0.5s steps(12) infinite;
+}
+.gait-hop.anim-run .torso {
+  animation: hop 0.32s steps(8) infinite;
+}
+.gait-hop.anim-walk .leg.front,
+.gait-hop.anim-run .leg.front {
+  transform: rotate(-30deg);
+}
+.gait-waddle.anim-walk .leg,
+.gait-waddle.anim-run .leg {
+  animation: none;
+}
+.gait-waddle.anim-walk .torso {
+  animation: waddle 0.6s steps(12) infinite;
+}
+.gait-waddle.anim-run .torso {
+  animation: waddle 0.32s steps(8) infinite;
+}
+.gait-waddle.anim-walk .leg.back.a {
+  animation: waddle-step 0.6s steps(12) infinite;
+}
+.gait-waddle.anim-walk .leg.back.b {
+  animation: waddle-step 0.6s steps(12) infinite -0.3s;
+}
+.gait-waddle.anim-run .leg.back.a {
+  animation: waddle-step 0.32s steps(8) infinite;
+}
+.gait-waddle.anim-run .leg.back.b {
+  animation: waddle-step 0.32s steps(8) infinite -0.16s;
+}
+
+/* ----- resting ----- */
+.anim-sit .torso {
+  transform: rotate(-16deg) translate(5%, 0);
+}
+.anim-sit .leg.back {
+  transform: rotate(62deg) translate(2%, -4%) scaleY(0.6);
+}
+.anim-sit .leg.front {
+  transform: rotate(-10deg) translate(2%, 0);
+}
+.anim-sit .head {
+  transform: rotate(10deg);
+}
+.upright.anim-sit .torso {
+  transform: translateY(5%) scaleY(0.92);
+}
+.upright.anim-sit .leg {
+  transform: none;
+}
+
+.anim-sleep .torso {
+  transform: translateY(7%) scaleY(0.78);
+}
+.anim-sleep .head {
+  transform: rotate(22deg) translate(-7%, 9%);
+}
+.anim-sleep .leg {
+  transform: rotate(78deg) scaleY(0.55);
+}
+.upright.anim-sleep .leg.back {
+  transform: none;
+}
+.anim-sleep .lid {
+  transform: scaleY(1);
+}
+.anim-sleep .tail {
+  transform: rotate(-24deg);
+}
+.anim-sleep .ear {
+  transform: rotate(-22deg);
+}
+.anim-sleep .zzz {
+  opacity: 1;
+}
+.anim-sleep .z {
+  animation: zfloat 2.4s steps(16) infinite;
+}
+.anim-sleep .z2 {
+  animation-delay: 0.8s;
+}
+.anim-sleep .z3 {
+  animation-delay: 1.6s;
+}
+
+.anim-tired .head {
+  transform: rotate(12deg) translateY(4%);
+}
+.anim-tired .lid {
+  transform: scaleY(0.62);
+}
+.anim-tired .tail {
+  transform: rotate(-20deg);
+}
+.anim-tired .torso {
+  animation: sway-slow 3s steps(24) infinite;
+}
+
+/* ----- eating & drinking ----- */
+.anim-eat .head,
+.anim-drink .head {
+  animation: peck 0.75s steps(12) infinite;
+}
+.anim-eat .props .bowl {
+  opacity: 1;
+}
+.anim-drink .props .puddle {
+  opacity: 1;
+}
+.anim-eat .tongue {
+  opacity: 1;
+}
+
+/* ----- play & movement bursts ----- */
+.anim-play .torso {
+  animation: play-bounce 0.55s steps(12) infinite;
+}
+.anim-play .ball {
+  opacity: 1;
+  animation: ball-bounce 0.55s steps(12) infinite;
+}
+.anim-play .tongue {
+  opacity: 1;
+}
+
+.anim-jump .torso {
+  animation: jump-squash 0.9s ease-out both;
+}
+.anim-jump .leg.back {
+  transform: rotate(28deg);
+}
+.anim-jump .leg.front {
+  transform: rotate(-24deg);
+}
+.anim-jump .ear {
+  transform: rotate(-16deg);
+}
+
+.anim-stretch .torso {
+  animation: stretch 2.6s ease-in-out both;
+}
+.anim-stretch .head {
+  transform: rotate(14deg) translate(2%, 5%);
+}
+.anim-stretch .leg.front {
+  transform: rotate(-30deg) scaleY(1.15);
+}
+.anim-stretch .tail {
+  transform: rotate(30deg);
+}
+
+/* ----- emotions ----- */
+.anim-happy .torso {
+  animation: happy-hop 0.45s steps(10) infinite;
+}
+.anim-happy .tongue {
+  opacity: 1;
+}
+.anim-happy .blush {
+  opacity: 0.9;
+}
+
+.anim-excited .torso {
+  animation: excited 0.3s steps(8) infinite;
+}
+.anim-excited .ear {
+  transform: rotate(-8deg);
+}
+.anim-excited .tongue {
+  opacity: 1;
+}
+
+.anim-sad .head {
+  transform: rotate(16deg) translate(-2%, 7%);
+}
+.anim-sad .tail {
+  transform: rotate(-32deg);
+}
+.anim-sad .ear {
+  transform: rotate(-26deg);
+}
+.anim-sad .torso {
+  transform: translateY(2%) scaleY(0.97);
+}
+.anim-sad .lid {
+  transform: scaleY(0.35);
+}
+
+.anim-curious .head {
+  animation: head-tilt 1.8s steps(20) infinite;
+}
+.anim-curious .ear {
+  transform: rotate(6deg);
+}
+.anim-curious .pupil,
+.anim-curious .pupil-shine {
+  transform: translate(calc(var(--look-x, 0) * 2.4px), calc(var(--look-y, 0) * 1.8px)) scale(1.15);
+}
+
+.anim-watch .head {
+  transform: rotate(-6deg) translateY(-2%);
+}
+.anim-watch .pupil {
+  transform: translate(calc(var(--look-x, 0) * 2.4px), calc(var(--look-y, 0) * 1.8px)) scale(1.25);
+}
+.face-viewer .pupil,
+.face-viewer .pupil-shine {
+  transform: translate(-0.6px, 0.4px) scale(1.3);
+}
+.face-viewer .head {
+  transform: rotate(-4deg) scale(1.04);
+}
+
+.anim-angry .torso {
+  animation: shake 0.16s steps(4) infinite;
+}
+.anim-angry .brow {
+  opacity: 1;
+}
+.anim-angry .lid {
+  transform: scaleY(0.45);
+}
+.anim-angry .ear {
+  transform: rotate(-30deg);
+}
+
+.anim-scared .torso {
+  animation: scared 1s ease-out both;
+}
+.anim-scared .pupil {
+  transform: scale(0.55);
+}
+.anim-scared .ear {
+  transform: rotate(-30deg);
+}
+.anim-scared .tail {
+  transform: rotate(-40deg);
+}
+
+.anim-dance .torso {
+  animation: dance 0.45s steps(10) infinite alternate;
+}
+.anim-dance .leg.a {
+  animation: leg-swing 0.45s steps(10) infinite;
+}
+.anim-dance .leg.b {
+  animation: leg-swing 0.45s steps(10) infinite -0.225s;
+}
+.anim-dance .tongue {
+  opacity: 1;
+}
+
+/* ----- grooming & bathing ----- */
+.anim-groom .head {
+  animation: groom 0.7s steps(12) infinite;
+}
+.anim-groom .torso {
+  transform: rotate(-8deg) translate(3%, 0);
+}
+.anim-groom .leg.back {
+  transform: rotate(60deg) scaleY(0.6);
+}
+.upright.anim-groom .leg.back {
+  transform: none;
+}
+.anim-groom .tongue {
+  opacity: 1;
+}
+
+.anim-bathe .torso {
+  animation: shake-slow 0.35s steps(8) infinite;
+}
+.anim-bathe .props .splash {
+  opacity: 1;
+}
+.anim-bathe .props .splash circle {
+  animation: splash 0.7s steps(10) infinite;
+}
+.anim-bathe .props .splash circle:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.anim-bathe .props .splash circle:nth-child(3) {
+  animation-delay: 0.4s;
+}
+.anim-bathe .lid {
+  transform: scaleY(1);
+}
+
+/* ----- tug of war: lean back, brace, strain ----- */
+@keyframes tug-strain {
+  0%,
+  100% {
+    transform: rotate(-11deg) translate(-2%, 1%);
+  }
+  50% {
+    transform: rotate(-14deg) translate(-3.5%, 0);
+  }
+}
+.anim-tug .torso {
+  animation: tug-strain 0.28s steps(4) infinite;
+}
+.anim-tug .leg.front {
+  transform: rotate(-32deg) scaleY(1.05);
+}
+.anim-tug .leg.back {
+  transform: rotate(-14deg);
+}
+.anim-tug .head {
+  transform: rotate(-12deg) translate(2%, 2%);
+}
+.anim-tug .lid {
+  transform: scaleY(0.4);
+}
+.anim-tug .brow {
+  opacity: 1;
+}
+@keyframes tug-strain-upright {
+  0%,
+  100% {
+    transform: rotate(-9deg) translate(-2%, 0);
+  }
+  50% {
+    transform: rotate(-12deg) translate(-3%, 0);
+  }
+}
+.upright.anim-tug .torso {
+  animation: tug-strain-upright 0.28s steps(4) infinite;
+}
+.upright.anim-tug .leg.front.arm {
+  transform: rotate(-60deg);
+}
+.upright.anim-tug .leg.back {
+  transform: none;
+}
+.upright.anim-tug .head {
+  transform: rotate(-6deg);
+}
+@keyframes tug-strain-human {
+  0%,
+  100% {
+    transform: rotate(-13deg) translate(-3%, 1%);
+  }
+  50% {
+    transform: rotate(-16deg) translate(-4%, 0);
+  }
+}
+.human.anim-tug .torso {
+  animation: tug-strain-human 0.28s steps(4) infinite;
+}
+.human.anim-tug .leg.front {
+  transform: rotate(-95deg);
+}
+.human.anim-tug .leg.back.a {
+  transform: rotate(-28deg);
+}
+.human.anim-tug .leg.back.b {
+  transform: rotate(12deg);
+}
+.human.anim-tug .head {
+  transform: rotate(-8deg);
+}
+
+/* ----- hiding / physics ----- */
+.is-hidden,
+.anim-hide {
+  opacity: 0.28;
+}
+.anim-hide .torso {
+  transform: translateY(9%) scaleY(0.8);
+}
+.anim-hide .pupil {
+  transform: scale(1.3);
+}
+
+.anim-dragged .torso {
+  transform: rotate(8deg);
+}
+.anim-dragged .leg {
+  animation: dangle 0.8s steps(14) infinite;
+}
+.anim-dragged .leg.b {
+  animation-delay: -0.4s;
+}
+.anim-dragged .pupil {
+  transform: scale(1.3);
+}
+.anim-dragged .ear {
+  transform: rotate(-20deg);
+}
+.anim-dragged .shadow-layer,
+.anim-fall .shadow-layer {
+  opacity: 0.35;
+  transform: scale(0.6);
+}
+
+.anim-fall .torso {
+  transform: scaleY(1.08);
+}
+.anim-fall .leg {
+  transform: scaleY(1.12);
+}
+.anim-fall .ear {
+  transform: rotate(18deg);
+}
+.anim-fall .pupil {
+  transform: scale(0.7);
+}
