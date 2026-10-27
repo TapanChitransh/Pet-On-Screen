@@ -17,6 +17,11 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to attach the builds to (leave empty to only build)"
+        required: false
+        default: ""
 
 defaults:
   run:
@@ -50,9 +55,10 @@ jobs:
             PetOnScreen/dist/*.blockmap
             PetOnScreen/dist/latest.yml
       - name: Attach to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
           generate_release_notes: true
           files: |
             PetOnScreen/dist/*.exe
@@ -74,15 +80,27 @@ jobs:
       - run: npm test
       - run: npm run build
       - name: Package (arm64 + x64 DMG and zip)
-        run: npx electron-builder --mac --publish never
+        # The signing variables are exported only when the matching secret exists: electron-builder
+        # treats an empty CSC_LINK as a certificate file path and fails. Without a certificate it
+        # produces an unsigned, un-notarized build.
+        run: |
+          for v in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            src="SECRET_$v"
+            if [ -n "${!src}" ]; then export "$v=${!src}"; fi
+          done
+          extra=""
+          if [ -z "${CSC_LINK:-}" ]; then
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+            extra="-c.mac.notarize=false"
+            echo "No signing certificate configured: building unsigned DMGs"
+          fi
+          npx electron-builder --mac --publish never $extra
         env:
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Without a certificate electron-builder still produces an unsigned, un-notarized build.
-          CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.CSC_LINK != '' }}
+          SECRET_CSC_LINK: ${{ secrets.CSC_LINK }}
+          SECRET_CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          SECRET_APPLE_ID: ${{ secrets.APPLE_ID }}
+          SECRET_APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          SECRET_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       - uses: actions/upload-artifact@v4
         with:
           name: PetOnScreen-mac
@@ -92,9 +110,10 @@ jobs:
             PetOnScreen/dist/*.blockmap
             PetOnScreen/dist/latest-mac.yml
       - name: Attach to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
           generate_release_notes: true
           files: |
             PetOnScreen/dist/*.dmg
