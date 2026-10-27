@@ -65,7 +65,28 @@ export interface PetSnapshot {
   gait: SpeciesDefinition['movement']['gait']
   /** active mini-game, if any */
   play: PlaySnapshot | null
+  /** true while the pet stays where the user put it down */
+  perched: boolean
+  /** 0..1 how out of breath the pet is; drives panting */
+  exertion: number
+  /** body lean in degrees (positive = clockwise): into acceleration on the ground, swinging while carried */
+  lean: number
+  /** px above the ground the pet stands on (jumps, drops, being carried) */
+  height: number
+  /** downward speed of the most recent landing, px/s */
+  impact: number
+  /** increments on every landing */
+  landKey: number
+  /** cursor attention: ears perk first ('ear'), then eyes and head follow ('look') */
+  attention: 'none' | 'ear' | 'look'
 }
+
+export type AttentionPhase = PetSnapshot['attention']
+
+/** States where the pet works hard enough to get out of breath. */
+const EXERTING_STATES = new Set<BehaviorState>(['RUNNING', 'ZOOMIES', 'CHASING', 'PLAYING', 'DANCING', 'FETCHING', 'JUMPING', 'TUGGING'])
+/** How close (px) the cursor has to come for the pet to take notice of it moving. */
+const ATTENTION_RADIUS = 300
 
 interface Activity {
   state: BehaviorState
@@ -127,6 +148,19 @@ export class PetEngine {
   private pendingDrop = false
   private level: number
 
+  // Lifelike motion: these are derived, never persisted.
+  private exertion = 0
+  private lean = 0
+  private dragVx = 0
+  private dragLastX = 0
+  private dragLastMs = 0
+  private attention: 'none' | 'noticing' | 'looking' = 'none'
+  private noticeAt = 0
+  private interestUntil = 0
+  private lookSince = 0
+  private ignoreUntil = 0
+  private pendingHoverAt: number | null = null
+
   private speech: string | null = null
   private speechUntil = 0
   private speechKey = 0
@@ -136,7 +170,7 @@ export class PetEngine {
 
   private listeners = new Set<(e: EngineEvent) => void>()
 
-  constructor(pet: PetSave, env: EngineEnvironment, position: Point | null, rng: Rng = createRng(), nowMs = Date.now()) {
+  constructor(pet: PetSave, env: EngineEnvironment, position: (Point & { perched?: boolean }) | null, rng: Rng = createRng(), nowMs = Date.now()) {
     this.pet = { ...pet, stats: { ...pet.stats }, memory: { ...pet.memory }, inventory: { ...pet.inventory } }
     this.species = SPECIES[pet.speciesId]
     if (!this.species) throw new Error(`Unknown species ${pet.speciesId}`)
@@ -155,6 +189,7 @@ export class PetEngine {
     this.applyBounds()
     if (position) this.movement.place(position.x, position.y)
     else this.movement.place(env.width * 0.5, this.movement.floorY())
+    if (position?.perched) this.movement.setPerch({ x: this.movement.x, y: this.movement.y })
     if (!env.freeRoam) this.movement.place(this.movement.x, this.movement.floorY())
 
     this.activity = this.makeActivity('LOOKING_AROUND', 'none', 3, 'system')
@@ -203,10 +238,58 @@ export class PetEngine {
 
   /** Cursor position relative to the pet window, or null when it is on another display. */
   setCursor(cursor: Point | null): void {
+    let moved = false
     if (cursor && this.cursor && (Math.abs(cursor.x - this.cursor.x) > 2 || Math.abs(cursor.y - this.cursor.y) > 2)) {
       this.lastCursorMoveT = this.t
-    } else if (cursor && !this.cursor) this.lastCursorMoveT = this.t
+      moved = true
+    } else if (cursor && !this.cursor) {
+      this.lastCursorMoveT = this.t
+      moved = true
+    }
     this.cursor = cursor
+    if (!cursor) {
+      this.attention = 'none'
+      return
+    }
+    if (moved && Math.hypot(cursor.x - this.movement.x, cursor.y - (this.movement.y - SPRITE_HEIGHT * this.env.scale * 0.5)) < ATTENTION_RADIUS) {
+      this.noticeCursor()
+    }
+  }
+
+  /**
+   * Something moved nearby. Real animals do not snap to it: there is a reaction delay (shorter for
+   * curious pets), the ears go first, and interest fades if nothing keeps happening.
+   */
+  private noticeCursor(): void {
+    if (this.attention === 'looking') {
+      this.interestUntil = this.t + 2.5
+      return
+    }
+    if (this.attention === 'noticing' || this.t < this.ignoreUntil) return
+    if (this.activity.state === 'SLEEPING') return
+    this.attention = 'noticing'
+    this.noticeAt = this.t + 0.1 + (1 - this.pet.personality.curiosity) * 0.35 + this.rng.range(0, 0.12)
+  }
+
+  private updateAttention(): void {
+    if (!this.cursor) {
+      this.attention = 'none'
+      return
+    }
+    if (this.attention === 'noticing' && this.t >= this.noticeAt) {
+      this.attention = 'looking'
+      this.lookSince = this.t
+      this.interestUntil = this.t + 2.5
+    }
+    if (this.attention === 'looking') {
+      const s = this.activity.state
+      const engaged = this.hovering || s === 'WATCHING' || s === 'CURIOUS' || s === 'CHASING'
+      const bored = this.t - this.lookSince > 5 + this.pet.personality.curiosity * 7
+      if (s === 'SLEEPING' || (!engaged && (this.t > this.interestUntil || bored))) {
+        this.attention = 'none'
+        this.ignoreUntil = this.t + this.rng.range(1.5, 4)
+      }
+    }
   }
 
   setUserActivity(idleSeconds: number, activeSeconds: number, returned: boolean): void {
@@ -220,6 +303,12 @@ export class PetEngine {
   hoverEnter(): void {
     this.hovering = true
     if (this.dragging || this.paused) return
+    // Reaction latency: the pet notices you a beat after the cursor arrives, not the same frame.
+    this.pendingHoverAt = this.t + 0.12 + (1 - this.pet.personality.curiosity) * 0.25
+  }
+
+  private hoverReact(): void {
+    if (!this.hovering || this.dragging || this.paused) return
     if (this.t - this.lastHoverReactionT < HOVER_REACTION_INTERVAL) return
     if (this.activity.source !== 'behavior') return
     if (!['IDLE', 'SITTING', 'LOOKING_AROUND', 'WALKING', 'GROOMING'].includes(this.activity.state)) return
@@ -232,6 +321,7 @@ export class PetEngine {
 
   hoverLeave(): void {
     this.hovering = false
+    this.pendingHoverAt = null
   }
 
   click(): void {
@@ -320,6 +410,7 @@ export class PetEngine {
 
   startFetch(): void {
     if (this.paused) return
+    this.releasePerch()
     this.games.startFetch(this.cursor, { x: this.movement.x, y: this.movement.y }, this.env.scale)
     this.say(this.rng.pick(['ball?! BALL!', 'ooh, the ball!', '*eyes widen*', 'throw it throw it']))
     this.emit({ type: 'sound', name: 'voice' })
@@ -329,6 +420,7 @@ export class PetEngine {
 
   startTug(): void {
     if (this.paused) return
+    this.releasePerch()
     this.games.startTug({ x: this.movement.x, y: this.movement.y, facing: this.movement.facing }, this.movement.floorY(), this.env.scale)
     this.say(this.rng.pick(['tug of war? you are on.', '*grabs rope* grrr', 'I will not lose.', '*plants paws*']))
     this.emit({ type: 'sound', name: 'voice' })
@@ -447,9 +539,12 @@ export class PetEngine {
   }
 
   dragStart(): void {
+    this.movement.setPerch(null)
     this.dragging = true
     this.pendingDrop = false
     this.dragStartY = this.movement.y
+    this.dragVx = 0
+    this.dragLastMs = 0
     this.movement.stop()
     this.behavior.markEnded(this.activity.state, this.t)
     this.previousState = this.activity.state
@@ -457,25 +552,49 @@ export class PetEngine {
     this.speech = null
   }
 
-  dragMove(x: number, y: number): void {
+  dragMove(x: number, y: number, nowMs = Date.now()): void {
     if (!this.dragging) return
     const halfW = (SPRITE_WIDTH / 2) * this.env.scale * 0.7
     const cx = Math.max(halfW, Math.min(this.env.width - halfW, x))
-    const cy = Math.max(SPRITE_HEIGHT * this.env.scale * 0.5, Math.min(this.movement.floorY(), y))
+    const cy = Math.max(SPRITE_HEIGHT * this.env.scale * 0.5, Math.min(this.movement.bottomY(), y))
+    // Track how fast it is being carried so the body can swing behind the hand.
+    if (this.dragLastMs > 0) {
+      const dts = (nowMs - this.dragLastMs) / 1000
+      if (dts > 0.004) {
+        const v = (cx - this.dragLastX) / dts
+        this.dragVx += (v - this.dragVx) * Math.min(1, dts * 14)
+      }
+    }
+    this.dragLastX = cx
+    this.dragLastMs = nowMs
     this.movement.place(cx, cy)
   }
 
   dragEnd(): void {
     if (!this.dragging) return
     this.dragging = false
+    this.dragVx = 0
     this.pet.memory = recordInteraction(this.pet.memory, 'drag', Date.now())
-    const dropHeight = this.movement.floorY() - this.movement.y
-    if (!this.env.freeRoam && dropHeight > 1) {
+    // The pet stays where it was put down (see "Let it roam" to release it).
+    this.movement.setPerch({ x: this.movement.x, y: this.movement.y })
+    this.applyReaction(this.interaction.dropped(this.interactionContext(), 0, this.rng))
+    this.emit({ type: 'save' })
+  }
+
+  /** Whether the pet is staying at a spot the user put it down at. */
+  isPerched(): boolean {
+    return this.movement.getPerch() !== null
+  }
+
+  /** Let a placed pet wander the whole screen again; it drops to the floor unless free roam is on. */
+  releasePerch(): void {
+    if (!this.movement.getPerch()) return
+    this.movement.setPerch(null)
+    if (!this.env.freeRoam && !this.movement.isOnFloor() && !this.dragging) {
+      this.dragStartY = this.movement.y
       this.movement.drop()
       this.pendingDrop = true
-      this.activity = this.makeActivity('FALLING', 'none', Infinity, 'system')
-    } else {
-      this.applyReaction(this.interaction.dropped(this.interactionContext(), 0, this.rng))
+      this.startActivity(this.makeActivity('FALLING', 'none', Infinity, 'system'))
     }
     this.emit({ type: 'save' })
   }
@@ -506,6 +625,12 @@ export class PetEngine {
     }
 
     this.checkSystemTriggers(nowMs)
+    if (this.pendingHoverAt !== null && this.t >= this.pendingHoverAt) {
+      this.pendingHoverAt = null
+      this.hoverReact()
+    }
+    this.updateAttention()
+    this.updateBody(dt, sleeping)
 
     if (this.speech && this.t > this.speechUntil) this.speech = null
     if (this.fx && this.t > this.activity.startedAt + 3) this.fx = null
@@ -515,6 +640,30 @@ export class PetEngine {
       this.emit({ type: 'save' })
     }
     return this.snapshot()
+  }
+
+  /** Exertion (panting) and body lean. Purely cosmetic state derived from what the body is doing. */
+  private updateBody(dt: number, sleeping: boolean): void {
+    const m = this.movement
+    const runSpeed = this.species.movement.runSpeed
+    const exerting = !this.dragging && (m.airborne || Math.abs(m.vx) > runSpeed * 0.55 || EXERTING_STATES.has(this.activity.state))
+    // Low energy = less fit: tires faster, recovers slower.
+    const fitness = 0.6 + 0.4 * (this.pet.stats.energy / 100)
+    if (exerting) this.exertion = Math.min(1, this.exertion + (dt * 0.22) / fitness)
+    else this.exertion = Math.max(0, this.exertion - dt * (sleeping ? 0.2 : 0.07) * fitness)
+
+    let target = 0
+    if (this.dragging) {
+      // No pointer events for a while means the hand stopped: let the swing settle.
+      if (this.t * 1000 - this.dragLastMs > 80) this.dragVx *= Math.max(0, 1 - dt * 8)
+      // Pivot is near the hand, so a positive (clockwise) lean swings the body back behind a rightward pull.
+      target = Math.max(-1, Math.min(1, this.dragVx / 700)) * 24
+    } else if (!m.airborne) {
+      target = Math.max(-1, Math.min(1, m.accel / 600)) * 9
+    }
+    const rate = this.dragging ? 9 : 14
+    this.lean += (target - this.lean) * (1 - Math.exp(-dt * rate))
+    if (Math.abs(this.lean) < 0.05) this.lean = 0
   }
 
   /** Apply a long absence (window hidden or app paused) in one step. */
@@ -762,6 +911,7 @@ export class PetEngine {
   private lookAt(): { dx: number; dy: number } | null {
     if (!this.cursor) return null
     const s = this.activity.state
+    if (s === 'SLEEPING') return null
     if (this.games.mode === 'fetch' && this.games.ball) {
       // eyes on the ball
       const headX = this.movement.x
@@ -769,8 +919,7 @@ export class PetEngine {
       return { dx: Math.max(-1, Math.min(1, (this.games.ball.x - headX) / 300)) * this.movement.facing, dy: Math.max(-1, Math.min(1, (this.games.ball.y - headY) / 300)) }
     }
     const watching = this.hovering || s === 'WATCHING' || s === 'CURIOUS' || s === 'CHASING'
-    const glance = this.t - this.lastCursorMoveT < 1.5 && Math.hypot(this.cursor.x - this.movement.x, this.cursor.y - this.movement.y) < 260
-    if (!watching && !glance) return null
+    if (!watching && this.attention !== 'looking') return null
     if (this.activity.faceViewer) return null
     const headX = this.movement.x
     const headY = this.movement.y - SPRITE_HEIGHT * this.env.scale * 0.7
@@ -781,6 +930,7 @@ export class PetEngine {
 
   snapshot(): PetSnapshot {
     const m = this.movement.snapshot()
+    const lookAt = this.lookAt()
     return {
       x: m.x,
       y: m.y,
@@ -791,7 +941,7 @@ export class PetEngine {
       moving: m.moving,
       speed: m.speed,
       airborne: m.airborne,
-      lookAt: this.lookAt(),
+      lookAt,
       faceViewer: this.activity.faceViewer,
       speech: this.speech,
       speechKey: this.speechKey,
@@ -806,7 +956,14 @@ export class PetEngine {
       name: this.pet.name,
       speciesId: this.pet.speciesId,
       gait: this.species.movement.gait,
-      play: this.games.mode === 'none' ? null : this.games.snapshot()
+      play: this.games.mode === 'none' ? null : this.games.snapshot(),
+      perched: this.isPerched(),
+      exertion: this.exertion,
+      lean: this.lean,
+      height: m.height,
+      impact: m.impact,
+      landKey: m.landKey,
+      attention: this.attention === 'noticing' ? 'ear' : lookAt ? 'look' : 'none'
     }
   }
 
@@ -816,8 +973,8 @@ export class PetEngine {
   }
 
   /** Position as a fraction of the window, for persistence across resolutions. */
-  positionFraction(): { fx: number; fy: number } {
-    return { fx: this.movement.x / this.env.width, fy: this.movement.y / this.env.height }
+  positionFraction(): { fx: number; fy: number; perched: boolean } {
+    return { fx: this.movement.x / this.env.width, fy: this.movement.y / this.env.height, perched: this.isPerched() }
   }
 
   /** Debug helper: force the next decision to be a spontaneous event. */
@@ -828,6 +985,11 @@ export class PetEngine {
 
   currentState(): BehaviorState {
     return this.activity.state
+  }
+
+  /** Exposed for tests: force an activity as if the behavior engine had chosen it. */
+  debugActivity(state: BehaviorState, movement: MovementMode, seconds: number): void {
+    this.startActivity(this.makeActivity(state, movement, seconds, 'behavior'))
   }
 
   /** Exposed for tests. */

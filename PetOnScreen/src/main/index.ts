@@ -226,10 +226,48 @@ async function runDevShots(dir: string): Promise<void> {
       await sleep(1200)
       await shoot(petWin, `species-${s.id}`)
     }
-    // Mini-games: a thrown ball in flight / being fetched, and a tug of war in progress.
     const js = (code: string): Promise<unknown> => petWin?.webContents.executeJavaScript(code, true) ?? Promise.resolve()
+    // Pose sheet: freeze the runtime and swap the animation class directly on the sprite.
+    sendToPet('pet:command', { type: 'adopt', speciesId: 'dog', name: 'Poses' } satisfies PetCommand)
+    await sleep(1200)
+    await js(`(() => { const r = window.__petRuntime; r.engine.setPaused(true); r.stop() })()`)
+    for (const anim of ['idle', 'walk', 'run', 'sit', 'sleep', 'eat', 'happy', 'sad', 'angry', 'scared', 'curious', 'tug']) {
+      await js(`(() => { const el = document.querySelector('.sprite-wrap'); el.className = el.className.replace(/anim-\\S+/, 'anim-${anim}') })()`)
+      await sleep(700)
+      await shoot(petWin, `pose-${anim}`)
+    }
+    await js(`(() => { const r = window.__petRuntime; r.engine.setPaused(false); r.start() })()`)
+    // Mini-games: a thrown ball in flight / being fetched, and a tug of war in progress.
     sendToPet('pet:command', { type: 'adopt', speciesId: 'dog', name: 'Max' } satisfies PetCommand)
     await sleep(800)
+    // Lifelike motion: lean while accelerating, ears-then-eyes attention, swing while carried, squash on landing.
+    await js(`window.__petRuntime.engine.debugActivity('RUNNING', 'run', 6)`)
+    await sleep(140)
+    await shoot(petWin, 'motion-run-start')
+    console.log('[devshot] run start', await js(`(() => { const s = window.__petRuntime.snapshot; return JSON.stringify({ facing: s.facing, speed: Math.round(s.speed), lean: s.lean.toFixed(1), state: s.state }) })()`))
+    await sleep(900)
+    await shoot(petWin, 'motion-run')
+    await js(`(() => { const r = window.__petRuntime; r.engine.debugActivity('SITTING', 'none', 30); r.engine.setCursor(null); r.kick() })()`)
+    await sleep(1500)
+    await js(`(() => { const r = window.__petRuntime; const s = r.snapshot; r.engine.setCursor({ x: s.x + 150, y: s.y - 60 }); r.kick() })()`)
+    await sleep(60)
+    await shoot(petWin, 'motion-notice-ear')
+    await sleep(900)
+    await shoot(petWin, 'motion-notice-look')
+    await js(`(() => { const r = window.__petRuntime; const s = r.snapshot; window.__drag = { x: s.x, y: s.y - 300 }; r.dragStart(); r.dragMove(window.__drag.x, window.__drag.y) })()`)
+    for (let i = 0; i < 12; i++) {
+      await js(`(() => { const r = window.__petRuntime; window.__drag.x += 28; r.dragMove(window.__drag.x, window.__drag.y) })()`)
+      await sleep(16)
+    }
+    await shoot(petWin, 'motion-carried')
+    console.log('[devshot] carried', await js(`(() => { const s = window.__petRuntime.snapshot; return JSON.stringify({ height: Math.round(s.height), lean: s.lean.toFixed(1), state: s.state }) })()`))
+    await js(`(() => { const r = window.__petRuntime; r.dragEnd(); r.releasePerch() })()`)
+    await sleep(400)
+    await shoot(petWin, 'motion-falling')
+    await sleep(200)
+    await shoot(petWin, 'motion-landed')
+    console.log('[devshot] landed', await js(`(() => { const s = window.__petRuntime.snapshot; return JSON.stringify({ height: Math.round(s.height), impact: Math.round(s.impact), landKey: s.landKey, state: s.state }) })()`))
+    await sleep(1500)
     await js(`(() => { const r = window.__petRuntime; r.engine.setCursor({ x: 500, y: 640 }); r.startFetch(); r.playPointerDown(500, 640); r.playPointerMove(530, 630) })()`)
     await sleep(40)
     await js(`(() => { const r = window.__petRuntime; r.playPointerMove(640, 590); r.playPointerUp(640, 590) })()`)

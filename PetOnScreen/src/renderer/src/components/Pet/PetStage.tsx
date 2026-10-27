@@ -147,7 +147,9 @@ export function PetStage({ runtime }: { runtime: PetRuntime }): JSX.Element {
           onContextMenu={onContextMenu}
           title={`${visual.name} — ${visual.state.toLowerCase().replace(/_/g, ' ')}`}
         >
-          <PetSprite look={species.look} visual={visual} />
+          <div className="pet-body">
+            <PetSprite look={species.look} visual={visual} />
+          </div>
           {visual.fx && <Fx key={visual.fxKey} kind={visual.fx} />}
           {visual.heldItem && <div className="held-item">{visual.heldItem}</div>}
         </div>
@@ -177,9 +179,14 @@ export function PetStage({ runtime }: { runtime: PetRuntime }): JSX.Element {
           y={overlay.y}
           petName={visual.name}
           playing={playing}
+          perched={visual.perched}
           onClose={() => setOverlay(null)}
           onAction={(action) => {
             switch (action) {
+              case 'roam':
+                runtime.releasePerch()
+                setOverlay(null)
+                break
               case 'pet':
                 runtime.command({ type: 'pet' })
                 setOverlay(null)

@@ -1,12 +1,13 @@
 import { Popover } from '../Pet/Popover'
 
-export type MenuAction = 'pet' | 'feed' | 'play' | 'fetch' | 'tug' | 'stopPlay' | 'talk' | 'inventory' | 'stats' | 'rename' | 'settings' | 'dashboard' | 'hide' | 'quit'
+export type MenuAction = 'roam' | 'pet' | 'feed' | 'play' | 'fetch' | 'tug' | 'stopPlay' | 'talk' | 'inventory' | 'stats' | 'rename' | 'settings' | 'dashboard' | 'hide' | 'quit'
 
 interface Props {
   x: number
   y: number
   petName: string
   playing?: boolean
+  perched?: boolean
   onAction: (action: MenuAction) => void
   onClose: () => void
 }
@@ -26,9 +27,9 @@ const ITEMS: { action: MenuAction; icon: string; label: string; hint?: string }[
   { action: 'hide', icon: '🙈', label: 'Hide pet', hint: 'tray to show' }
 ]
 
-export function PetMenu({ x, y, petName, playing = false, onAction, onClose }: Props): JSX.Element {
+export function PetMenu({ x, y, petName, playing = false, perched = false, onAction, onClose }: Props): JSX.Element {
   return (
-    <Popover x={x} y={y} width={210} className="menu">
+    <Popover x={x} y={y} width={228} className="menu">
       <div className="menu-title">
         <span>{petName}</span>
         <button className="icon-btn" onClick={onClose} aria-label="Close">
@@ -41,6 +42,16 @@ export function PetMenu({ x, y, petName, playing = false, onAction, onClose }: P
             <span className="menu-icon">⏹</span>
             <span className="menu-label">Stop playing</span>
             <span className="menu-hint">Esc</span>
+          </button>
+          <div className="menu-sep" />
+        </>
+      )}
+      {perched && !playing && (
+        <>
+          <button className="menu-item" onClick={() => onAction('roam')}>
+            <span className="menu-icon">🐾</span>
+            <span className="menu-label">Let it roam</span>
+            <span className="menu-hint">stays put now</span>
           </button>
           <div className="menu-sep" />
         </>

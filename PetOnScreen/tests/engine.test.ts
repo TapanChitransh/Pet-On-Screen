@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createRng } from '@engine/rng'
 import { PetEngine } from '@engine/PetEngine'
+import { MovementEngine, PERCH_RANGE } from '@engine/MovementEngine'
 import { BehaviorEngine } from '@engine/BehaviorEngine'
 import { PersonalityEngine } from '@engine/PersonalityEngine'
 import { createPet } from '@models/Pet'
@@ -102,18 +103,39 @@ describe('PetEngine autonomous behavior', () => {
     expect(states.size).toBeGreaterThanOrEqual(3)
   })
 
-  it('falls back to the floor after being dropped', () => {
+  it('stays where it was put down, and falls once released', () => {
     const engine = makeEngine('rabbit')
     engine.tick(1_000_100)
     engine.dragStart()
     engine.dragMove(500, 300)
     engine.dragEnd()
+    expect(engine.isPerched()).toBe(true)
+    runFor(engine, 60, 1_000_100)
+    let snap = engine.snapshot()
+    expect(snap.y).toBe(300)
+    expect(Math.abs(snap.x - 500)).toBeLessThanOrEqual(PERCH_RANGE + 1)
+    expect(snap.perched).toBe(true)
+
+    engine.releasePerch()
     expect(engine.currentState()).toBe('FALLING')
-    const seen = runFor(engine, 3, 1_000_100)
+    const seen = runFor(engine, 3, 1_000_100 + 60_000)
     expect(seen.has('FALLING')).toBe(true)
-    const snap = engine.snapshot()
+    snap = engine.snapshot()
     expect(snap.y).toBe(env.height)
-    expect(snap.state).not.toBe('FALLING')
+    expect(snap.perched).toBe(false)
+  })
+
+  it('remembers the spot across restarts', () => {
+    const engine = makeEngine('dog')
+    engine.tick(1_000_100)
+    engine.dragStart()
+    engine.dragMove(400, 250)
+    engine.dragEnd()
+    const pos = engine.positionFraction()
+    expect(pos.perched).toBe(true)
+    const restored = new PetEngine(engine.toSave(), env, { x: pos.fx * env.width, y: pos.fy * env.height, perched: true }, createRng(1), Date.now())
+    expect(restored.isPerched()).toBe(true)
+    expect(restored.snapshot().y).toBeCloseTo(250, 0)
   })
 
   it('serializes and restores', () => {
@@ -123,6 +145,158 @@ describe('PetEngine autonomous behavior', () => {
     const restored = new PetEngine(save, env, null, createRng(1), save.lastSeenAt + 1000)
     expect(restored.pet.name).toBe('Test')
     expect(restored.pet.stats.energy).toBeCloseTo(save.stats.energy, 0)
+  })
+})
+
+describe('lifelike motion', () => {
+  const bounds = { width: 1600, height: 900, halfWidth: 42, petHeight: 110, freeRoam: false }
+
+  it('accelerates to speed and brakes into its destination instead of teleporting between speeds', () => {
+    const rng = createRng(3)
+    const m = new MovementEngine(SPECIES.dog.movement)
+    m.setBounds(bounds)
+    m.place(300, 900)
+    m.begin('toPoint', rng, null, 120)
+    m.setPointTarget({ x: 900, y: 900 })
+    const dt = 1 / 30
+    let t = 0
+    m.update(dt, rng, null, (t += dt))
+    expect(m.snapshot().speed).toBeLessThan(60)
+    let peak = 0
+    for (let i = 0; i < 20; i++) {
+      m.update(dt, rng, null, (t += dt))
+      peak = Math.max(peak, m.snapshot().speed)
+    }
+    expect(peak).toBeGreaterThan(115)
+    expect(peak).toBeLessThanOrEqual(120.5)
+    let arrived = false
+    for (let i = 0; i < 300 && !arrived; i++) arrived = m.update(dt, rng, null, (t += dt)).arrived
+    expect(arrived).toBe(true)
+    expect(Math.abs(m.x - 900)).toBeLessThanOrEqual(4)
+    expect(m.snapshot().speed).toBeLessThan(40)
+  })
+
+  it('keeps facing the way it slides while braking, then turns (skid turn)', () => {
+    const rng = createRng(4)
+    const m = new MovementEngine(SPECIES.dog.movement)
+    m.setBounds(bounds)
+    m.place(400, 900)
+    m.begin('toPoint', rng, null, 160)
+    m.setPointTarget({ x: 1200, y: 900 })
+    const dt = 1 / 30
+    let t = 0
+    for (let i = 0; i < 30; i++) m.update(dt, rng, null, (t += dt))
+    expect(m.facing).toBe(1)
+    m.setPointTarget({ x: 100, y: 900 })
+    m.update(dt, rng, null, (t += dt))
+    expect(m.facing).toBe(1)
+    expect(m.vx).toBeGreaterThan(0)
+    let turnedAt = -1
+    for (let i = 0; i < 30; i++) {
+      m.update(dt, rng, null, (t += dt))
+      if (m.facing === -1) {
+        turnedAt = i
+        break
+      }
+    }
+    expect(turnedAt).toBeGreaterThan(0)
+    expect(turnedAt).toBeLessThan(20)
+  })
+
+  it('reports the impact of a landing and its height while airborne', () => {
+    const rng = createRng(5)
+    const m = new MovementEngine(SPECIES.cat.movement)
+    m.setBounds(bounds)
+    m.place(500, 600)
+    expect(m.snapshot().height).toBeCloseTo(300, 0)
+    m.drop()
+    expect(m.airborne).toBe(true)
+    const dt = 1 / 60
+    let t = 0
+    for (let i = 0; i < 240 && m.airborne; i++) m.update(dt, rng, null, (t += dt))
+    const snap = m.snapshot()
+    expect(snap.airborne).toBe(false)
+    expect(snap.height).toBe(0)
+    expect(snap.landKey).toBe(1)
+    expect(snap.impact).toBeGreaterThan(900)
+  })
+
+  it('gets out of breath running and recovers at rest', () => {
+    const engine = makeEngine('dog', 11)
+    engine.tick(1_000_100)
+    engine.debugActivity('RUNNING', 'run', 6)
+    let t = 1_000_100
+    for (let i = 0; i < 30 * 6; i++) {
+      if (engine.currentState() !== 'RUNNING') engine.debugActivity('RUNNING', 'run', 6)
+      engine.tick((t += 1000 / 30))
+    }
+    const winded = engine.snapshot().exertion
+    expect(winded).toBeGreaterThan(0.6)
+    engine.debugActivity('SITTING', 'none', 60)
+    for (let i = 0; i < 30 * 25; i++) engine.tick((t += 1000 / 30))
+    expect(engine.snapshot().exertion).toBeLessThan(winded * 0.3)
+  })
+
+  it('notices a moving cursor after a short delay, ears first, and loses interest when it stops', () => {
+    const engine = makeEngine('rabbit', 13)
+    let t = 1_000_100
+    engine.debugActivity('SITTING', 'none', 120)
+    engine.tick(t)
+    const pet = engine.snapshot()
+    engine.setCursor({ x: pet.x + 120, y: pet.y - 40 })
+    let snap = engine.tick((t += 1000 / 30))
+    expect(snap.attention).toBe('ear')
+    expect(snap.lookAt).toBeNull()
+    for (let i = 0; i < 20; i++) snap = engine.tick((t += 1000 / 30))
+    expect(snap.attention).toBe('look')
+    expect(snap.lookAt).not.toBeNull()
+    expect(snap.lookAt!.dx).toBeGreaterThan(0)
+    // the cursor sits still: interest fades
+    for (let i = 0; i < 30 * 15; i++) snap = engine.tick((t += 1000 / 30))
+    const engaged = ['WATCHING', 'CURIOUS', 'CHASING'].includes(snap.state)
+    if (!engaged) expect(snap.attention).toBe('none')
+  })
+
+  it('does not react to a hover on the same frame', () => {
+    let immediate = 0
+    let later = 0
+    for (let seed = 1; seed <= 12; seed++) {
+      const engine = makeEngine('cat', seed)
+      let t = 1_000_100
+      engine.debugActivity('IDLE', 'none', 30)
+      engine.tick(t)
+      engine.hoverEnter()
+      if (engine.tick((t += 1000 / 30)).state === 'WATCHING') immediate++
+      for (let i = 0; i < 20; i++) engine.tick((t += 1000 / 30))
+      if (engine.currentState() === 'WATCHING') later++
+    }
+    expect(immediate).toBe(0)
+    expect(later).toBeGreaterThan(0)
+  })
+
+  it('leans into acceleration and swings while carried', () => {
+    const engine = makeEngine('dog', 17)
+    let t = 1_000_100
+    engine.tick(t)
+    engine.debugActivity('RUNNING', 'run', 6)
+    let maxLean = 0
+    for (let i = 0; i < 15; i++) maxLean = Math.max(maxLean, Math.abs(engine.tick((t += 1000 / 30)).lean))
+    expect(maxLean).toBeGreaterThan(2)
+
+    engine.dragStart()
+    let ms = t
+    let x = 600
+    for (let i = 0; i < 20; i++) {
+      ms += 16
+      x += 20
+      engine.dragMove(x, 400, ms)
+      engine.tick(ms)
+    }
+    const carried = engine.snapshot()
+    expect(carried.state).toBe('DRAGGED')
+    expect(carried.lean).toBeGreaterThan(8)
+    expect(carried.height).toBeGreaterThan(400)
+    engine.dragEnd()
   })
 })
 

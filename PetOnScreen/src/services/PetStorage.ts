@@ -43,7 +43,7 @@ export class PetStorage {
     this.schedule(true)
   }
 
-  setPosition(position: { fx: number; fy: number }): void {
+  setPosition(position: { fx: number; fy: number; perched?: boolean }): void {
     this.data = { ...this.data, position }
     this.schedule()
   }

@@ -57,7 +57,8 @@ export interface SaveData {
   activePetId: string | null
   pets: PetSave[]
   /** Pet position as a fraction of the window so it survives resolution changes. */
-  position: { fx: number; fy: number } | null
+  /** `perched`: the user put the pet down here and it should stay. */
+  position: { fx: number; fy: number; perched?: boolean } | null
   lastSavedAt: number
 }
 

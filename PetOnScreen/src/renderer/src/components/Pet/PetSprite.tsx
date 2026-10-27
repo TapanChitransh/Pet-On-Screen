@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from 'react'
+import { useId, type CSSProperties, type ReactNode } from 'react'
 import type { SpeciesLook } from '@models/Species'
 import type { AnimationName } from '@models/Behavior'
 
@@ -16,6 +16,8 @@ export interface SpriteVisual {
   lookAt?: { dx: number; dy: number } | null
   /** Dashboard previews have no runtime driving the breathing transform, so they opt into a cheap CSS breathe. */
   preview?: boolean
+  /** out of breath: tongue out */
+  panting?: boolean
 }
 
 interface Props {
@@ -28,6 +30,23 @@ interface Props {
 const VIEWBOX = '0 0 120 110'
 const pct = (x: number, y: number): string => `${((x / 120) * 100).toFixed(1)}% ${((y / 110) * 100).toFixed(1)}%`
 
+/** Mixes a #rgb/#rrggbb color toward black (amount < 0) or white (amount > 0). */
+export function shade(hex: string, amount: number): string {
+  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex.trim())
+  if (!m) return hex
+  let h = m[1]
+  if (h.length === 3) h = [...h].map((c) => c + c).join('')
+  const target = amount < 0 ? 0 : 255
+  const a = Math.abs(amount)
+  const ch = (i: number): string => {
+    const v = parseInt(h.slice(i, i + 2), 16)
+    return Math.round(v + (target - v) * a)
+      .toString(16)
+      .padStart(2, '0')
+  }
+  return `#${ch(0)}${ch(2)}${ch(4)}`
+}
+
 /**
  * Procedural placeholder sprite. Three archetypes (quadruped, upright bird, human) are built from
  * the same named parts (.tail .leg .torso .body .head .wing) so the clips in sprite.css work for all.
@@ -35,8 +54,9 @@ const pct = (x: number, y: number): string => `${((x / 120) * 100).toFixed(1)}% 
  * Performance notes (measured, see README):
  * - each animated part is its own absolutely positioned <div> holding a small SVG, so transforms
  *   are composited on the GPU instead of re-painting the SVG every frame;
- * - always-on idle motion (breathing, tail, blink, ear twitch, eye tracking) is driven by
- *   PetRuntime at ~8Hz, not by 60fps CSS keyframes;
+ * - always-on idle motion (breathing, tail, blink, ear twitch, eye tracking, head follow) is driven by
+ *   PetRuntime at ~8Hz, not by 60fps CSS keyframes; the head's `motion` wrapper carries the head
+ *   turn/tilt so it composes with the pose transform on .part.head;
  * - state loops in sprite.css use steps() so they update ~10-25 times a second.
  */
 export function PetSprite({ look, visual, className = '' }: Props): JSX.Element {
@@ -44,6 +64,9 @@ export function PetSprite({ look, visual, className = '' }: Props): JSX.Element 
     ['--body' as string]: look.body,
     ['--belly' as string]: look.belly,
     ['--accent' as string]: look.accent,
+    // Static per species, so setting them on the root never triggers per-frame repaints.
+    ['--body-dark' as string]: shade(look.body, -0.16),
+    ['--outline' as string]: shade(look.body, -0.45),
     transform: `scaleX(${visual.facing})`
   }
   if (visual.lookAt) {
@@ -59,6 +82,9 @@ export function PetSprite({ look, visual, className = '' }: Props): JSX.Element 
     visual.faceViewer ? 'face-viewer' : '',
     visual.hidden ? 'is-hidden' : '',
     visual.preview ? 'preview' : '',
+    // Standing still inside a walk/run clip (mid-walk pause, braking): the legs rest instead of pedalling the air.
+    !visual.moving && (visual.animation === 'walk' || visual.animation === 'run') ? 'is-still' : '',
+    visual.panting ? 'is-panting' : '',
     className
   ]
     .filter(Boolean)
@@ -134,38 +160,82 @@ function Layer({ className, motion = false, origin, children }: { className: str
   )
 }
 
-function Eye({ cx, cy, r = 3.6, angry = false, iris }: { cx: number; cy: number; r?: number; angry?: boolean; iris?: string }): JSX.Element {
+interface EyeProps {
+  cx: number
+  cy: number
+  r?: number
+  angry?: boolean
+  iris?: string
+  /** draw a white eyeball around the pupil (owl); otherwise a glossy toon eye */
+  sclera?: boolean
+  /** color of the skin the eye sits on, used for the eyelid */
+  lid?: string
+}
+
+function Eye({ cx, cy, r = 3.6, angry = false, iris, sclera = false, lid = 'var(--body)' }: EyeProps): JSX.Element {
+  const ink = '#1d1d24'
   return (
     <g className="eye">
-      <circle cx={cx} cy={cy} r={r} fill="#fff" />
-      {iris && <circle className="pupil" cx={cx + 0.4} cy={cy} r={r * 0.72} fill={iris} />}
-      <circle className="pupil" cx={cx + 0.6} cy={cy} r={r * (iris ? 0.42 : 0.58)} fill="#1d1d24" />
-      <circle className="pupil-shine" cx={cx + 1.4} cy={cy - 1.1} r={r * 0.2} fill="#fff" />
-      <ellipse className="lid" cx={cx} cy={cy - r} rx={r + 0.6} ry={r + 0.6} fill="var(--body)" />
-      {angry && <line className="brow" x1={cx - r} y1={cy - r - 1.5} x2={cx + r} y2={cy - r - 3} stroke="#1d1d24" strokeWidth="1.6" />}
+      {sclera && <circle cx={cx} cy={cy} r={r} fill="#fff" />}
+      {iris ? (
+        <>
+          <ellipse className="pupil" cx={cx} cy={cy} rx={r * 0.82} ry={r * 0.95} fill={ink} />
+          <ellipse className="pupil" cx={cx} cy={cy + 0.1} rx={r * 0.66} ry={r * 0.78} fill={iris} />
+          <ellipse className="pupil" cx={cx + 0.2} cy={cy + 0.2} rx={r * 0.34} ry={r * 0.44} fill={ink} />
+        </>
+      ) : (
+        <ellipse className="pupil" cx={cx} cy={cy} rx={r * (sclera ? 0.58 : 0.78)} ry={r * (sclera ? 0.58 : 0.95)} fill={ink} />
+      )}
+      <circle className="pupil-shine" cx={cx + r * 0.28} cy={cy - r * 0.38} r={r * 0.3} fill="#fff" />
+      <circle className="pupil-shine" cx={cx - r * 0.3} cy={cy + r * 0.42} r={r * 0.13} fill="#fff" opacity="0.8" />
+      <g className="lid">
+        <ellipse cx={cx} cy={cy - 0.2} rx={r + 0.9} ry={r + 1} fill={lid} />
+        <path d={`M${cx - r * 0.85} ${cy + 0.2} q${r * 0.85} ${r * 0.75} ${r * 1.7} 0`} stroke={ink} strokeWidth="1.1" strokeLinecap="round" fill="none" />
+      </g>
+      {angry && <line className="brow" x1={cx - r} y1={cy - r - 1.5} x2={cx + r} y2={cy - r - 3} stroke={ink} strokeWidth="1.6" strokeLinecap="round" />}
     </g>
   )
 }
 
 /* ------------------------------------------------------------------ quadruped */
 
+/** Ears drawn over the head (floppy ears hang in front of the face side). */
+function FrontEars({ look }: { look: SpeciesLook }): JSX.Element | null {
+  if (look.ear !== 'floppy') return null
+  const c = look.earColor ?? 'var(--accent)'
+  return (
+    <g className="ears">
+      <path
+        className="ear left ol"
+        style={{ transformOrigin: '70% 4%' }}
+        d="M77 31 Q65 29 62 41 Q59 54 64 61 Q69 64 72 58 Q73.5 48 80 36 Z"
+        fill={c}
+      />
+    </g>
+  )
+}
+
 function Ears({ look }: { look: SpeciesLook }): JSX.Element | null {
   switch (look.ear) {
     case 'pointy':
       return (
         <g className="ears">
-          <path className="ear left" d="M72 40 L74 22 L84 36 Z" fill="var(--body)" />
-          <path className="ear right" d="M90 36 L100 22 L102 40 Z" fill="var(--body)" />
-          <path d="M75 37 L76 28 L82 36 Z" fill="var(--belly)" opacity="0.7" />
-          <path d="M92 36 L98 28 L99 37 Z" fill="var(--belly)" opacity="0.7" />
+          <g className="ear left">
+            <path className="ol" d="M71 43 Q69 27 75 18 Q84 24 88 34 Z" fill="var(--body)" />
+            <path d="M74.5 37 Q74 29 76.5 24 Q81.5 28 84 33 Z" fill="#f2b8c0" opacity="0.75" />
+          </g>
+          <g className="ear right">
+            <path className="ol" d="M88 33 Q95 22 103 17 Q106 29 103 43 Z" fill="var(--body)" />
+            <path d="M92 32 Q97 26 101 23 Q102.5 30 101 37 Z" fill="#f2b8c0" opacity="0.75" />
+          </g>
         </g>
       )
     case 'floppy': {
       const c = look.earColor ?? 'var(--accent)'
+      // Only the far ear sits behind the head; the near one is drawn by FrontEars.
       return (
         <g className="ears">
-          <ellipse className="ear left" cx="71" cy="46" rx="6" ry="13" fill={c} transform="rotate(8 71 46)" />
-          <ellipse className="ear right" cx="101" cy="46" rx="6" ry="13" fill={c} transform="rotate(-8 101 46)" />
+          <path className="ear right ol" style={{ transformOrigin: '30% 4%' }} d="M93 32 Q105 30 107 42 Q109 53 103 56 Q99 54 98 47 Q96 40 91 36 Z" fill={c} />
         </g>
       )
     }
@@ -212,40 +282,50 @@ function Ears({ look }: { look: SpeciesLook }): JSX.Element | null {
   }
 }
 
+/** A stroked tail with a darker outline drawn underneath. */
+function StrokeTail({ d, width, color = 'var(--body)' }: { d: string; width: number; color?: string }): JSX.Element {
+  return (
+    <>
+      <path d={d} stroke="var(--outline)" strokeWidth={width + 2.6} strokeLinecap="round" fill="none" />
+      <path d={d} stroke={color} strokeWidth={width} strokeLinecap="round" fill="none" />
+    </>
+  )
+}
+
 function Tail({ look }: { look: SpeciesLook }): JSX.Element | null {
   switch (look.tail) {
     case 'curly':
-      return <path d="M30 64 q-12 -14 2 -20 q10 -4 6 6" stroke="var(--body)" strokeWidth="7" strokeLinecap="round" fill="none" />
+      return <StrokeTail d="M32 62 q-13 -10 -6 -21 q7 -9 12 -1" width={7} />
     case 'long':
-      return <path d="M30 68 q-16 2 -18 -18 q0 -8 6 -8" stroke="var(--body)" strokeWidth="6" strokeLinecap="round" fill="none" />
+      return <StrokeTail d="M32 68 q-16 2 -18 -18 q0 -8 6 -8" width={6} />
     case 'bushy':
       return (
         <g>
-          <ellipse cx="22" cy="60" rx="10" ry="16" fill="var(--body)" transform="rotate(30 22 60)" />
-          <ellipse cx="15" cy="50" rx="5" ry="7" fill="var(--belly)" transform="rotate(30 15 50)" />
+          <path className="ol" d="M34 62 Q18 66 12 52 Q8 40 16 34 Q22 46 34 54 Z" fill="var(--body)" />
+          <path d="M16 34 Q10 40 12 48 Q16 44 18 38 Z" fill="var(--belly)" />
         </g>
       )
     case 'ringed':
       return (
         <g transform="rotate(28 24 62)">
-          <ellipse cx="24" cy="62" rx="9" ry="20" fill="var(--body)" />
-          <rect x="15" y="50" width="18" height="4" fill={look.mask ?? 'var(--accent)'} opacity="0.85" />
-          <rect x="15" y="60" width="18" height="4" fill={look.mask ?? 'var(--accent)'} opacity="0.85" />
-          <rect x="15" y="70" width="18" height="4" fill={look.mask ?? 'var(--accent)'} opacity="0.85" />
-          <ellipse cx="24" cy="80" rx="8" ry="4" fill={look.mask ?? 'var(--accent)'} />
+          <ellipse className="ol" cx="24" cy="62" rx="9" ry="20" fill="var(--body)" />
+          <rect x="15.5" y="50" width="17" height="4" fill={look.mask ?? 'var(--accent)'} opacity="0.85" />
+          <rect x="15.5" y="60" width="17" height="4" fill={look.mask ?? 'var(--accent)'} opacity="0.85" />
+          <rect x="15.5" y="70" width="17" height="4" fill={look.mask ?? 'var(--accent)'} opacity="0.85" />
+          <ellipse cx="24" cy="79" rx="7" ry="3.6" fill={look.mask ?? 'var(--accent)'} />
         </g>
       )
     case 'puff':
-      return <circle cx="30" cy="62" r="7" fill="var(--belly)" />
+      return <circle className="ol" cx="30" cy="62" r="7" fill="var(--belly)" />
     case 'stub':
-      return <circle cx="29" cy="66" r="5" fill="var(--body)" />
+      return <circle className="ol" cx="30" cy="62" r="5" fill="var(--body)" />
     case 'short':
-      return <ellipse cx="30" cy="58" rx="6" ry="4" fill="var(--belly)" transform="rotate(-30 30 58)" />
+      return <ellipse className="ol" cx="31" cy="58" rx="6" ry="4" fill="var(--belly)" transform="rotate(-30 31 58)" />
     case 'spade':
       return (
         <g>
-          <path d="M30 66 q-14 -2 -18 -18" stroke="var(--body)" strokeWidth="5" strokeLinecap="round" fill="none" />
-          <path d="M12 50 L6 40 L18 42 Z" fill="var(--accent)" />
+          <StrokeTail d="M32 66 q-14 -2 -18 -18" width={5} />
+          <path className="ol" d="M14 50 L7 40 L19 42 Z" fill="var(--accent)" />
         </g>
       )
     case 'flowing':
@@ -258,12 +338,12 @@ function Tail({ look }: { look: SpeciesLook }): JSX.Element | null {
     case 'tassel':
       return (
         <g>
-          <path d="M30 64 q-14 6 -16 24" stroke="var(--body)" strokeWidth="4" strokeLinecap="round" fill="none" />
-          <ellipse cx="13" cy="90" rx="4.5" ry="6" fill={look.lionMane ?? 'var(--accent)'} />
+          <StrokeTail d="M32 64 q-14 6 -16 24" width={4} />
+          <ellipse className="ol" cx="15" cy="90" rx="4.5" ry="6" fill={look.lionMane ?? 'var(--accent)'} />
         </g>
       )
     case 'thin':
-      return <path d="M30 66 q-12 -4 -16 -20" stroke="var(--body)" strokeWidth="4" strokeLinecap="round" fill="none" />
+      return <StrokeTail d="M32 64 q-12 -4 -16 -20" width={4} />
     default:
       return null
   }
@@ -274,10 +354,11 @@ function Snout({ look }: { look: SpeciesLook }): JSX.Element {
     case 'dog':
       return (
         <g className="snout">
-          <ellipse cx="98" cy="56" rx="10" ry="7.5" fill="var(--belly)" />
-          <ellipse cx="103" cy="53" rx="3.6" ry="2.8" fill="#2a2a30" />
-          <path className="mouth" d="M96 60 q4 4 8 0" stroke="#2a2a30" strokeWidth="1.3" fill="none" />
-          <ellipse className="tongue" cx="100" cy="63" rx="2.5" ry="3" fill="#e66a7f" />
+          <ellipse className="ol" cx="99" cy="57" rx="11.5" ry="8" fill={look.faceMask ?? 'var(--belly)'} />
+          <path d="M102.5 51.5 q4.5 -2.2 9 0 q-0.6 4.6 -4.5 5.4 q-3.9 -0.8 -4.5 -5.4 z" fill="#2a2a30" />
+          <ellipse cx="105.6" cy="52.3" rx="1.6" ry="0.8" fill="#fff" opacity="0.55" />
+          <path className="mouth" d="M107 57 v1.6 q-2.6 3.4 -6 1 M107 58.6 q2 2.6 4.2 0.6" stroke="#2a2a30" strokeWidth="1.2" strokeLinecap="round" fill="none" />
+          <path className="tongue" d="M102.5 61 q0 5 3.2 5 q3.2 0 3 -5 z" fill="#e66a7f" stroke="#b84a5e" strokeWidth="0.7" />
         </g>
       )
     case 'cat':
@@ -369,20 +450,22 @@ function Snout({ look }: { look: SpeciesLook }): JSX.Element {
     case 'wolf':
       return (
         <g className="snout">
-          <path d="M92 49 L112 56 L93 64 Z" fill="var(--body)" />
-          <path d="M96 58 L111 56 L96 63 Z" fill="var(--belly)" />
-          <circle cx="110" cy="56" r="2.6" fill="#1d1d24" />
-          <path className="mouth" d="M99 61 q4 3 8 -2" stroke="#1d1d24" strokeWidth="1" fill="none" />
+          <path className="ol" d="M90 50 Q104 48 112 53 Q115 57 111 60 Q102 64 92 62 Z" fill={look.faceMask ?? 'var(--belly)'} />
+          <ellipse cx="111" cy="53.6" rx="3.4" ry="2.6" fill="#1d1d24" />
+          <ellipse cx="110.2" cy="52.8" rx="1.2" ry="0.6" fill="#fff" opacity="0.5" />
+          <path className="mouth" d="M110 58.5 q-4 3 -10 1" stroke="#1d1d24" strokeWidth="1.1" strokeLinecap="round" fill="none" />
+          <path className="tongue" d="M103 60.5 q0 5 3 5 q3 0 2.8 -5 z" fill="#e66a7f" stroke="#b84a5e" strokeWidth="0.7" />
         </g>
       )
     case 'pug':
       return (
         <g className="snout">
-          <ellipse cx="94" cy="55" rx="11" ry="9" fill={look.mask ?? 'var(--accent)'} opacity="0.9" />
-          <ellipse cx="97" cy="54" rx="3.6" ry="2.8" fill="#1d1d24" />
-          <path className="mouth" d="M91 60 q5 4 10 0" stroke="#1d1d24" strokeWidth="1.3" fill="none" />
-          <path d="M84 46 q6 -4 12 -1 M86 42 q5 -3 10 -1" stroke={look.mask ?? 'var(--accent)'} strokeWidth="1.2" fill="none" opacity="0.7" />
-          <ellipse className="tongue" cx="96" cy="63" rx="2.4" ry="2.6" fill="#e66a7f" />
+          <ellipse className="ol" cx="96" cy="56" rx="11" ry="9" fill={look.mask ?? 'var(--accent)'} />
+          <ellipse cx="99" cy="53" rx="3.8" ry="2.8" fill="#121216" />
+          <ellipse cx="98.2" cy="52.2" rx="1.3" ry="0.6" fill="#fff" opacity="0.45" />
+          <path className="mouth" d="M99 56.5 v1.6 q-2.6 3 -5.6 1 M99 58.1 q2.4 2.6 5 0.8" stroke="#f3e6d0" strokeWidth="1" strokeLinecap="round" fill="none" opacity="0.8" />
+          <path d="M80 37 q6 -3.5 12 -1 M82 33 q5 -3 10 -1" stroke={look.mask ?? 'var(--accent)'} strokeWidth="1.2" strokeLinecap="round" fill="none" opacity="0.55" />
+          <path className="tongue" d="M95 61 q0 4.6 3 4.6 q3 0 2.8 -4.6 z" fill="#e66a7f" stroke="#b84a5e" strokeWidth="0.7" />
         </g>
       )
     case 'hamster':
@@ -416,8 +499,6 @@ function HeadExtras({ look }: { look: SpeciesLook }): JSX.Element | null {
             <path d="M72 24 L76 12 L82 22 Z" />
             <path d="M92 24 L100 14 L100 26 Z" />
             <path d="M104 34 L114 30 L108 40 Z" />
-            <path d="M54 62 L44 66 L54 70 Z" />
-            <path d="M58 76 L52 86 L64 80 Z" />
           </g>
           <circle cx="83" cy="52" r="24" fill="#b8702e" opacity="0.5" />
         </g>
@@ -445,61 +526,96 @@ function HeadExtras({ look }: { look: SpeciesLook }): JSX.Element | null {
 }
 
 function Quadruped({ look }: { look: SpeciesLook }): JSX.Element {
+  const uid = useId().replace(/:/g, '')
   const rx = look.bodyWidth / 2
   const ry = look.bodyHeight / 2
   const legLen = look.legLength ?? 0
   const legTop = 80 - legLen
-  const legH = 104 - legTop
   const cy = legTop - ry + 8
-  const legs: { cls: string; x: number; fill: string; opacity?: number }[] = [
-    { cls: 'leg back a', x: 36, fill: 'var(--body)' },
-    { cls: 'leg back b', x: 47, fill: 'var(--accent)', opacity: 0.9 },
-    { cls: 'leg front a', x: 70, fill: 'var(--body)' },
-    { cls: 'leg front b', x: 82, fill: 'var(--body)' }
+  // Long bodies (dachshund) push the head forward so it stays at the front of the body.
+  const headDx = Math.max(-3, Math.min(9, (rx - 32) * 0.9))
+  const legW = 10.5
+  const paw = look.faceMask ?? (look.spotColor ? 'var(--body)' : undefined)
+  const legs: { cls: string; x: number; far: boolean }[] = [
+    { cls: 'leg back b', x: 60 - rx + 16, far: true },
+    { cls: 'leg front a', x: 60 + rx - 24 + headDx * 0.3, far: true },
+    { cls: 'leg back a', x: 60 - rx + 6, far: false },
+    { cls: 'leg front b', x: 60 + rx - 14 + headDx * 0.3, far: false }
   ]
-  const leg = (l: (typeof legs)[number]): JSX.Element => (
-    <Layer key={l.cls} className={l.cls} origin={pct(l.x + 5.5, legTop)}>
-      <rect x={l.x} y={legTop} width="11" height={legH} rx="5" fill={l.fill} opacity={l.opacity} />
-    </Layer>
-  )
-  const headShift = `translate(0 ${-legLen})`
+  const leg = (l: (typeof legs)[number]): JSX.Element => {
+    const fill = l.far ? 'var(--body-dark)' : 'var(--body)'
+    const pawFill = paw && !l.far ? paw : fill
+    const px = l.x + legW / 2 + 1.2
+    return (
+      <Layer key={l.cls} className={l.cls} origin={pct(l.x + legW / 2, legTop)}>
+        <rect className="ol" x={l.x} y={legTop} width={legW} height={101 - legTop} rx={legW / 2} fill={fill} />
+        <ellipse className="ol" cx={px} cy="101.4" rx={legW / 2 + 1.7} ry="3.3" fill={pawFill} />
+        {!l.far && <path d={`M${px - 1.6} 99.6 v1.8 M${px + 1.6} 99.6 v1.8`} stroke="var(--outline)" strokeWidth="0.8" strokeLinecap="round" opacity="0.6" />}
+      </Layer>
+    )
+  }
+  const bodyPath = `M${60 - rx + ry} ${cy - ry} H${60 + rx - ry} A${ry} ${ry} 0 0 1 ${60 + rx - ry} ${cy + ry} H${60 - rx + ry} A${ry} ${ry} 0 0 1 ${60 - rx + ry} ${cy - ry} Z`
+  const headShift = `translate(${headDx} ${-legLen})`
+  const dogFace = look.snout === 'dog' || look.snout === 'wolf' || look.snout === 'pug'
+  const eyeR = look.snout === 'pug' ? 4.3 : 3.9
   return (
     <>
-      <Layer className="tail" motion origin={pct(30, cy)}>
+      <Layer className="tail" motion origin={pct(32, cy)}>
         <Tail look={look} />
       </Layer>
       {look.wings && (
         <Layer className="wing" origin={pct(52, cy - 4)}>
-          <path d={`M50 ${cy - 4} q-6 -30 26 -34 q-10 14 -6 34 z`} fill={look.wings} />
+          <path className="ol" d={`M50 ${cy - 4} q-6 -30 26 -34 q-10 14 -6 34 z`} fill={look.wings} />
           <path d={`M52 ${cy - 6} q-2 -20 18 -26`} stroke="var(--accent)" strokeWidth="1.2" fill="none" opacity="0.5" />
         </Layer>
       )}
-      {legs.slice(0, 2).map(leg)}
+      {legs.map(leg)}
       <div className="part torso" style={{ transformOrigin: pct(60, legTop + 10) }}>
         <Layer className="body" motion origin={pct(60, cy)}>
-          <ellipse cx="60" cy={cy} rx={rx} ry={ry} fill="var(--body)" />
-          <ellipse cx="62" cy={cy + ry * 0.35} rx={rx * 0.6} ry={ry * 0.5} fill="var(--belly)" />
-          {look.spots && (
-            <g fill={look.spotColor ?? 'var(--belly)'} opacity="0.9">
-              <circle cx="50" cy={cy - 6} r={look.spotColor ? 3.4 : 2.4} />
-              <circle cx="60" cy={cy - 10} r={look.spotColor ? 2.8 : 2.2} />
-              <circle cx="70" cy={cy - 5} r={look.spotColor ? 3.2 : 2.4} />
-              <circle cx="56" cy={cy} r={look.spotColor ? 2.6 : 1.8} />
-              {look.spotColor && <circle cx="42" cy={cy + 2} r="2.4" />}
-              {look.spotColor && <circle cx="66" cy={cy + 6} r="2" />}
-            </g>
-          )}
+          <defs>
+            <clipPath id={`body-${uid}`}>
+              <path d={bodyPath} />
+            </clipPath>
+          </defs>
+          <path className="ol" d={bodyPath} fill="var(--body)" />
+          <g clipPath={`url(#body-${uid})`}>
+            <ellipse cx="62" cy={cy + ry * 0.62} rx={rx * 0.62} ry={ry * 0.5} fill="var(--belly)" />
+            {look.faceMask && <ellipse cx={60 + rx - 6} cy={cy + 3} rx="11" ry={ry * 0.8} fill={look.faceMask} />}
+            <ellipse cx={60} cy={cy - ry * 0.55} rx={rx * 0.7} ry={ry * 0.22} fill="#fff" opacity="0.07" />
+            {look.spots && (
+              <g fill={look.spotColor ?? 'var(--belly)'} opacity="0.92">
+                <circle cx="48" cy={cy - 6} r={look.spotColor ? 3.4 : 2.4} />
+                <circle cx="60" cy={cy - 10} r={look.spotColor ? 2.8 : 2.2} />
+                <circle cx="71" cy={cy - 4} r={look.spotColor ? 3.2 : 2.4} />
+                <circle cx="56" cy={cy} r={look.spotColor ? 2.6 : 1.8} />
+                {look.spotColor && <circle cx="40" cy={cy + 2} r="2.4" />}
+                {look.spotColor && <circle cx="66" cy={cy + 7} r="2" />}
+                {look.spotColor && <circle cx="80" cy={cy - 8} r="1.8" />}
+              </g>
+            )}
+          </g>
         </Layer>
-        <Layer className="head" origin={pct(84, 62 - legLen)}>
+        <Layer className="head" motion origin={pct(84 + headDx, 62 - legLen)}>
           <g transform={headShift}>
+            <defs>
+              <clipPath id={`head-${uid}`}>
+                <ellipse cx="86" cy="49" rx="19.5" ry="18" />
+              </clipPath>
+            </defs>
             <HeadExtras look={look} />
             <Ears look={look} />
-            <circle cx="86" cy="50" r="19" fill="var(--body)" />
-            {look.faceMask && <ellipse cx="90" cy="55" rx="13" ry="11" fill={look.faceMask} />}
+            <ellipse className="ol" cx="86" cy="49" rx="19.5" ry="18" fill="var(--body)" />
+            {look.faceMask && (
+              <g clipPath={`url(#head-${uid})`} fill={look.faceMask}>
+                <ellipse cx="88" cy="61" rx="17" ry="9.5" />
+                <path d="M84.5 58 Q85.5 42 87.5 33 Q89.5 42 91 58 Z" />
+              </g>
+            )}
             {look.spotColor && (
               <g fill={look.spotColor} opacity="0.9">
-                <circle cx="76" cy="40" r="2.6" />
-                <circle cx="96" cy="36" r="2.2" />
+                <circle cx="75" cy="40" r="2.6" />
+                <circle cx="96" cy="35" r="2.2" />
+                <circle cx="89" cy="62" r="1.4" />
               </g>
             )}
             {look.snout === 'panda' && (
@@ -517,8 +633,8 @@ function Quadruped({ look }: { look: SpeciesLook }): JSX.Element {
             )}
             {look.snout === 'panda' || look.snout === 'redpanda' ? (
               <>
-                <Eye cx={80} cy={47} r={2.8} />
-                <Eye cx={94} cy={47} r={2.8} />
+                <Eye cx={80} cy={47} r={2.8} lid={look.mask} />
+                <Eye cx={94} cy={47} r={2.8} lid={look.mask} />
               </>
             ) : look.snout === 'hamster' ? (
               <>
@@ -527,16 +643,16 @@ function Quadruped({ look }: { look: SpeciesLook }): JSX.Element {
               </>
             ) : (
               <>
-                <Eye cx={81} cy={47} angry iris={look.iris} />
-                <Eye cx={93} cy={46} angry iris={look.iris} />
+                <Eye cx={dogFace ? 80 : 81} cy={46} r={eyeR} angry iris={look.iris} />
+                <Eye cx={93} cy={45} r={eyeR} angry iris={look.iris} />
               </>
             )}
-            <Snout look={look} />
             <ellipse className="blush" cx="76" cy="55" rx="3.5" ry="2" fill="#f28ea0" opacity="0.5" />
+            <Snout look={look} />
+            <FrontEars look={look} />
           </g>
         </Layer>
       </div>
-      {legs.slice(2).map(leg)}
     </>
   )
 }
@@ -584,11 +700,11 @@ function Penguin({ look }: { look: SpeciesLook }): JSX.Element {
         <Layer className="leg front b arm" origin={pct(84, 56)}>
           <ellipse cx="84" cy="70" rx="6" ry="15" fill="var(--body)" transform="rotate(-12 84 70)" />
         </Layer>
-        <Layer className="head" origin={pct(64, 56)}>
+        <Layer className="head" motion origin={pct(64, 56)}>
           <circle cx="64" cy="40" r="18" fill="var(--body)" />
           <ellipse cx="66" cy="44" rx="11" ry="9" fill="var(--belly)" />
-          <Eye cx={61} cy={39} r={3.2} angry />
-          <Eye cx={72} cy={39} r={3.2} angry />
+          <Eye cx={61} cy={39} r={3.2} angry lid="var(--belly)" />
+          <Eye cx={72} cy={39} r={3.2} angry lid="var(--belly)" />
           <g className="snout">
             <path d="M74 44 L86 47 L74 50 Z" fill={look.accent} />
           </g>
@@ -623,14 +739,14 @@ function Owl({ look }: { look: SpeciesLook }): JSX.Element {
         <Layer className="leg front b arm" origin={pct(86, 58)}>
           <ellipse cx="86" cy="74" rx="7" ry="18" fill={wing} transform="rotate(-10 86 74)" />
         </Layer>
-        <Layer className="head" origin={pct(62, 56)}>
+        <Layer className="head" motion origin={pct(62, 56)}>
           <path className="ear left" d="M46 30 L44 12 L58 24 Z" fill="var(--body)" />
           <path className="ear right" d="M78 30 L80 12 L66 24 Z" fill="var(--body)" />
           <circle cx="62" cy="38" r="21" fill="var(--body)" />
           <ellipse cx="53" cy="40" rx="9" ry="10" fill="var(--belly)" />
           <ellipse cx="71" cy="40" rx="9" ry="10" fill="var(--belly)" />
-          <Eye cx={53} cy={40} r={6} iris={look.accent} />
-          <Eye cx={71} cy={40} r={6} iris={look.accent} />
+          <Eye cx={53} cy={40} r={6} iris={look.accent} sclera lid="var(--belly)" />
+          <Eye cx={71} cy={40} r={6} iris={look.accent} sclera lid="var(--belly)" />
           <g className="snout">
             <path d="M62 44 L58 50 L66 50 Z" fill={look.accent} />
           </g>
@@ -657,7 +773,7 @@ function Duck({ look }: { look: SpeciesLook }): JSX.Element {
         <Layer className="leg front b arm" origin={pct(80, 64)}>
           <ellipse cx="80" cy="76" rx="7" ry="13" fill={wing} transform="rotate(-14 80 76)" />
         </Layer>
-        <Layer className="head" origin={pct(66, 56)}>
+        <Layer className="head" motion origin={pct(66, 56)}>
           <circle cx="66" cy="42" r="16" fill="var(--body)" />
           <Eye cx={62} cy={40} r={3} angry />
           <Eye cx={73} cy={40} r={3} angry />
@@ -690,7 +806,7 @@ function Swan({ look }: { look: SpeciesLook }): JSX.Element {
         <Layer className="leg front b arm" origin={pct(60, 70)}>
           <ellipse cx="60" cy="74" rx="15" ry="8" fill={wing} transform="rotate(-22 60 74)" />
         </Layer>
-        <Layer className="head" origin={pct(66, 72)}>
+        <Layer className="head" motion origin={pct(66, 72)}>
           <path d="M66 74 q18 -6 12 -30 q-4 -14 6 -20" stroke="var(--body)" strokeWidth="9" strokeLinecap="round" fill="none" />
           <circle cx="84" cy="24" r="9" fill="var(--body)" />
           <path d="M86 24 L100 26 L86 30 Z" fill={look.accent} />
@@ -768,12 +884,12 @@ function Human({ look }: { look: SpeciesLook }): JSX.Element {
           <rect x="76" y="62" width="9" height="15" rx="4.5" fill={skin} />
           <circle cx="80.5" cy="79" r="4.5" fill={skin} />
         </Layer>
-        <Layer className="head" origin={pct(60, 44)}>
+        <Layer className="head" motion origin={pct(60, 44)}>
           <rect x="56" y="40" width="8" height="8" fill={skin} />
           <circle cx="60" cy="30" r="15" fill={skin} />
           <Hair look={look} />
-          <Eye cx={54.5} cy={31} r={2.6} />
-          <Eye cx={65.5} cy={31} r={2.6} />
+          <Eye cx={54.5} cy={31} r={2.6} lid={skin} />
+          <Eye cx={65.5} cy={31} r={2.6} lid={skin} />
           {look.glasses && (
             <g stroke="#2a2a30" strokeWidth="1.1" fill="none" opacity="0.85">
               <circle cx="54.5" cy="31" r="4.6" />

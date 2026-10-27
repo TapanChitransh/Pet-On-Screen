@@ -8,8 +8,9 @@
    - every compositor frame costs real CPU, so the number of visual updates per second is what we
      budget, not the amount of work per update;
    - always-on idle motion is written by PetRuntime at ~8Hz: breathing and tail sway as inline
-     transforms on .body/.tail .idle-motion, and --blink --ear --look-x --look-y on the .head layer
-     (never on the root: an inherited variable change there repaints every layer);
+     transforms on .body/.tail .idle-motion, head turn/tilt on .head .idle-motion, and --blink --ear
+     --look-x --look-y on the .head layer (never on the root: an inherited variable change there
+     repaints every layer; the one exception is --stride, which changes a few times per walk);
    - state loops below are CSS keyframes with steps(), capping them at ~10-25 updates a second;
    - every animated part is an absolutely positioned <div> (composited transform); nothing inside an
      SVG is animated continuously.
@@ -20,7 +21,8 @@
   width: 100%;
   height: 100%;
   transform-origin: 50% 100%;
-  transition: transform 0.14s ease, opacity 0.4s ease;
+  /* the facing flip passes through scaleX(0): long enough to read as turning around */
+  transition: transform 0.22s ease-in-out, opacity 0.4s ease;
 }
 .sprite-wrap .part {
   position: absolute;
@@ -41,6 +43,17 @@
 }
 .sprite-wrap .idle-motion {
   will-change: transform;
+}
+/* the head trails the eyes (PetRuntime low-passes the gaze); no transition here: a transition
+   makes the compositor run at 60Hz after every 8Hz write, measurably more than the stepped motion */
+/* out of breath after running or playing */
+.is-panting .tongue {
+  opacity: 1;
+}
+/* standing still inside a locomotion clip: legs rest instead of pedalling the air */
+.is-still .leg,
+.is-still .torso {
+  animation: none !important;
 }
 .shadow-layer .shadow {
   fill: rgba(0, 0, 0, 0.22);
@@ -113,10 +126,21 @@
   transform-box: fill-box;
   transform: scaleY(var(--blink, 0));
 }
+/* Scale pupils around their own center: without fill-box a scale() pivots on the SVG origin and
+   throws the pupils off the face (scared / curious / face-viewer poses). */
 .pupil,
 .pupil-shine {
-  transform: translate(calc(var(--look-x, 0) * 2.4px), calc(var(--look-y, 0) * 1.8px));
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+  transform: translate(calc(var(--look-x, 0) * 1.6px), calc(var(--look-y, 0) * 1.2px));
   transition: transform 0.15s ease;
+}
+/* soft cartoon outline on the main shapes, a darker tone of the body color */
+.sprite-wrap .ol {
+  stroke: var(--outline, rgba(0, 0, 0, 0.35));
+  stroke-width: 1.5px;
+  stroke-linejoin: round;
+  paint-order: stroke;
 }
 .brow,
 .tongue,
@@ -640,13 +664,38 @@
   transform: rotate(-20deg);
 }
 
+/* stride length follows speed: PetRuntime sets --stride (1 = the species' nominal speed) */
+.anim-walk .leg.a,
+.anim-walk .leg.b,
+.anim-walk .torso {
+  animation-duration: calc(0.55s * var(--stride, 1));
+}
+.anim-walk .leg.b {
+  animation-delay: calc(-0.275s * var(--stride, 1));
+}
+.anim-run .leg.a,
+.anim-run .leg.b,
+.anim-run .torso {
+  animation-duration: calc(0.3s * var(--stride, 1));
+}
+.anim-run .leg.b {
+  animation-delay: calc(-0.15s * var(--stride, 1));
+}
+.human.anim-walk .leg.front.a {
+  animation-delay: calc(-0.275s * var(--stride, 1));
+}
+.human.anim-run .leg.front.a {
+  animation-delay: calc(-0.15s * var(--stride, 1));
+}
+
 /* gait variants */
 .gait-prowl.anim-walk .leg.a,
-.gait-prowl.anim-walk .leg.b {
-  animation-duration: 0.7s;
-}
+.gait-prowl.anim-walk .leg.b,
 .gait-prowl.anim-walk .torso {
-  animation: bob 0.7s steps(12) infinite;
+  animation-duration: calc(0.7s * var(--stride, 1));
+}
+.gait-prowl.anim-walk .leg.b {
+  animation-delay: calc(-0.35s * var(--stride, 1));
 }
 .gait-hop.anim-walk .leg,
 .gait-hop.anim-run .leg {
@@ -654,9 +703,11 @@
 }
 .gait-hop.anim-walk .torso {
   animation: hop 0.5s steps(12) infinite;
+  animation-duration: calc(0.5s * var(--stride, 1));
 }
 .gait-hop.anim-run .torso {
   animation: hop 0.32s steps(8) infinite;
+  animation-duration: calc(0.32s * var(--stride, 1));
 }
 .gait-hop.anim-walk .leg.front,
 .gait-hop.anim-run .leg.front {
@@ -668,29 +719,37 @@
 }
 .gait-waddle.anim-walk .torso {
   animation: waddle 0.6s steps(12) infinite;
+  animation-duration: calc(0.6s * var(--stride, 1));
 }
 .gait-waddle.anim-run .torso {
   animation: waddle 0.32s steps(8) infinite;
+  animation-duration: calc(0.32s * var(--stride, 1));
 }
 .gait-waddle.anim-walk .leg.back.a {
   animation: waddle-step 0.6s steps(12) infinite;
+  animation-duration: calc(0.6s * var(--stride, 1));
 }
 .gait-waddle.anim-walk .leg.back.b {
   animation: waddle-step 0.6s steps(12) infinite -0.3s;
+  animation-duration: calc(0.6s * var(--stride, 1));
+  animation-delay: calc(-0.3s * var(--stride, 1));
 }
 .gait-waddle.anim-run .leg.back.a {
   animation: waddle-step 0.32s steps(8) infinite;
+  animation-duration: calc(0.32s * var(--stride, 1));
 }
 .gait-waddle.anim-run .leg.back.b {
   animation: waddle-step 0.32s steps(8) infinite -0.16s;
+  animation-duration: calc(0.32s * var(--stride, 1));
+  animation-delay: calc(-0.16s * var(--stride, 1));
 }
 
 /* ----- resting ----- */
 .anim-sit .torso {
-  transform: rotate(-16deg) translate(5%, 0);
+  transform: rotate(-17deg) translate(4%, 7%);
 }
 .anim-sit .leg.back {
-  transform: rotate(62deg) translate(2%, -4%) scaleY(0.6);
+  transform: rotate(-78deg) translate(-2%, 6%) scaleY(0.75);
 }
 .anim-sit .leg.front {
   transform: rotate(-10deg) translate(2%, 0);
@@ -850,18 +909,18 @@
 }
 .anim-curious .pupil,
 .anim-curious .pupil-shine {
-  transform: translate(calc(var(--look-x, 0) * 2.4px), calc(var(--look-y, 0) * 1.8px)) scale(1.15);
+  transform: translate(calc(var(--look-x, 0) * 1.6px), calc(var(--look-y, 0) * 1.2px)) scale(1.15);
 }
 
 .anim-watch .head {
   transform: rotate(-6deg) translateY(-2%);
 }
 .anim-watch .pupil {
-  transform: translate(calc(var(--look-x, 0) * 2.4px), calc(var(--look-y, 0) * 1.8px)) scale(1.25);
+  transform: translate(calc(var(--look-x, 0) * 1.6px), calc(var(--look-y, 0) * 1.2px)) scale(1.12);
 }
 .face-viewer .pupil,
 .face-viewer .pupil-shine {
-  transform: translate(-0.6px, 0.4px) scale(1.3);
+  transform: translate(-0.6px, 0.4px) scale(1.12);
 }
 .face-viewer .head {
   transform: rotate(-4deg) scale(1.04);
@@ -884,7 +943,7 @@
   animation: scared 1s ease-out both;
 }
 .anim-scared .pupil {
-  transform: scale(0.55);
+  transform: scale(0.7);
 }
 .anim-scared .ear {
   transform: rotate(-30deg);
@@ -1025,7 +1084,7 @@
   transform: translateY(9%) scaleY(0.8);
 }
 .anim-hide .pupil {
-  transform: scale(1.3);
+  transform: scale(1.12);
 }
 
 .anim-dragged .torso {
@@ -1038,16 +1097,12 @@
   animation-delay: -0.4s;
 }
 .anim-dragged .pupil {
-  transform: scale(1.3);
+  transform: scale(1.12);
 }
 .anim-dragged .ear {
   transform: rotate(-20deg);
 }
-.anim-dragged .shadow-layer,
-.anim-fall .shadow-layer {
-  opacity: 0.35;
-  transform: scale(0.6);
-}
+/* the contact shadow's size/opacity follow the pet's height; PetRuntime writes them inline */
 
 .anim-fall .torso {
   transform: scaleY(1.08);

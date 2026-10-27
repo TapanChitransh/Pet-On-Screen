@@ -25,10 +25,32 @@ export interface MovementSnapshot {
   airborne: boolean
   /** current horizontal speed in px/s (abs) */
   speed: number
+  /** smoothed horizontal acceleration in px/s² (signed); renderers lean the body into it */
+  accel: number
+  /** px above the ground the pet stands on (0 when grounded) */
+  height: number
+  /** downward speed at the most recent landing in px/s (0 until it has landed) */
+  impact: number
+  /** increments on every landing so a renderer can react to it exactly once */
+  landKey: number
 }
 
 const GRAVITY = 1800
 const EDGE_MARGIN = 12
+/** Seconds to reach cruising speed from standing; braking is quicker. */
+const ACCEL_TIME = 0.28
+const BRAKE_TIME = 0.16
+/** Above this speed the pet keeps facing the way it is sliding (skid turn) instead of its target. */
+const TURN_SPEED = 25
+/** How far (px at any scale) a placed pet may wander left/right of the spot it was put down. */
+export const PERCH_RANGE = 90
+
+/** Move `v` toward `target` by at most `maxDelta`. */
+function approach(v: number, target: number, maxDelta: number): number {
+  const d = target - v
+  if (Math.abs(d) <= maxDelta) return target
+  return v + Math.sign(d) * maxDelta
+}
 
 /**
  * Handles where the pet is and how it gets somewhere. Uses simple kinematics with
@@ -47,6 +69,17 @@ export class MovementEngine {
   private bounds: MovementBounds = { width: 1280, height: 720, halfWidth: 40, petHeight: 80, freeRoam: false }
   private mode: MovementMode = 'none'
   private chaseHops = 0
+  /** vertical cruising velocity in free roam (separate from the jump/drop velocity `vy`) */
+  private vyMove = 0
+  /** smoothed horizontal acceleration (px/s²), read by PetEngine for the body lean */
+  accel = 0
+  private impact = 0
+  private landKey = 0
+  /**
+   * Where the user put the pet down. While set, this is the pet's ground: gravity lands it here and it
+   * only wanders a little to either side, so it stays where it was placed.
+   */
+  private perch: Point | null = null
 
   constructor(private style: MovementStyle) {}
 
@@ -57,20 +90,41 @@ export class MovementEngine {
   setBounds(b: MovementBounds): void {
     const wasFloor = this.isOnFloor()
     this.bounds = b
+    if (this.perch) this.perch = { x: Math.max(EDGE_MARGIN, Math.min(b.width - EDGE_MARGIN, this.perch.x)), y: Math.min(b.height, this.perch.y) }
     this.clampToBounds()
     if (!b.freeRoam && wasFloor) this.y = this.floorY()
     if (!b.freeRoam && this.y > this.floorY()) this.y = this.floorY()
   }
 
+  /** The ground the pet stands on: the spot it was placed at, or the bottom of the work area. */
   floorY(): number {
+    return this.perch ? this.perch.y : this.bounds.height
+  }
+
+  /** The bottom of the work area, regardless of any perch. */
+  bottomY(): number {
     return this.bounds.height
   }
 
+  setPerch(p: Point | null): void {
+    this.perch = p ? { x: p.x, y: Math.min(this.bounds.height, p.y) } : null
+  }
+
+  getPerch(): Point | null {
+    return this.perch
+  }
+
   minX(): number {
-    return this.bounds.halfWidth + EDGE_MARGIN
+    const lo = this.bounds.halfWidth + EDGE_MARGIN
+    return this.perch ? Math.max(lo, Math.min(this.perch.x, this.maxScreenX()) - PERCH_RANGE) : lo
   }
 
   maxX(): number {
+    const hi = this.maxScreenX()
+    return this.perch ? Math.min(hi, Math.max(this.perch.x, this.bounds.halfWidth + EDGE_MARGIN) + PERCH_RANGE) : hi
+  }
+
+  private maxScreenX(): number {
     return this.bounds.width - this.bounds.halfWidth - EDGE_MARGIN
   }
 
@@ -88,13 +142,17 @@ export class MovementEngine {
     this.y = y
     this.vx = 0
     this.vy = 0
+    this.vyMove = 0
+    this.accel = 0
     this.target = null
     this.clampToBounds()
   }
 
   /** Keep the pet inside the window. The floor is enforced by gravity, not here, so drags can lift the pet. */
   clampToBounds(): void {
-    this.x = Math.max(this.minX(), Math.min(this.maxX(), this.x))
+    const x = Math.max(this.minX(), Math.min(this.maxX(), this.x))
+    if (x !== this.x) this.vx = 0
+    this.x = x
     this.y = Math.max(this.bounds.petHeight * 0.5, Math.min(this.floorY(), this.y))
   }
 
@@ -106,10 +164,8 @@ export class MovementEngine {
     this.target = null
     this.pauseUntil = 0
     this.chaseHops = mode === 'chase' ? rng.int(3, 6) : 0
-    if (mode === 'none') {
-      this.vx = 0
-      return
-    }
+    // 'none' keeps the current velocity: update() brakes it to a stop instead of freezing mid-stride.
+    if (mode === 'none') return
     this.pickSpeed(mode, rng)
     if (speed !== undefined) this.speed = speed
     this.pickTarget(mode, rng, cursor)
@@ -125,14 +181,14 @@ export class MovementEngine {
   private clampPoint(p: Point): Point {
     return {
       x: Math.max(this.minX(), Math.min(this.maxX(), p.x)),
-      y: this.bounds.freeRoam ? Math.max(this.minY(), Math.min(this.floorY(), p.y)) : this.floorY()
+      y: this.bounds.freeRoam && !this.perch ? Math.max(this.minY(), Math.min(this.floorY(), p.y)) : this.floorY()
     }
   }
 
+  /** End the current movement; the pet brakes to a stop over the next few frames. */
   stop(): void {
     this.mode = 'none'
     this.target = null
-    this.vx = 0
   }
 
   /** Launch the pet upward. Height in px at scale 1. */
@@ -187,7 +243,7 @@ export class MovementEngine {
   }
 
   private randomY(rng: Rng): number {
-    if (!this.bounds.freeRoam) return this.floorY()
+    if (!this.bounds.freeRoam || this.perch) return this.floorY()
     return rng.range(this.minY(), this.floorY())
   }
 
@@ -211,7 +267,7 @@ export class MovementEngine {
         if (cursor) {
           this.target = {
             x: Math.max(this.minX(), Math.min(this.maxX(), cursor.x)),
-            y: this.bounds.freeRoam ? Math.max(this.minY(), Math.min(this.floorY(), cursor.y)) : this.floorY()
+            y: this.bounds.freeRoam && !this.perch ? Math.max(this.minY(), Math.min(this.floorY(), cursor.y)) : this.floorY()
           }
         } else this.target = null
         break
@@ -226,35 +282,40 @@ export class MovementEngine {
   /**
    * Advance by dt seconds. Returns true when the current destination was reached
    * (so the behavior engine may end the behavior early or pick a new destination).
+   *
+   * Horizontal motion has momentum: velocity ramps up over ACCEL_TIME, eases out over the last
+   * few tens of pixels before a destination and brakes (rather than freezing) when a movement ends.
    */
   update(dt: number, rng: Rng, cursor: Point | null, nowSeconds: number): { arrived: boolean } {
     let arrived = false
+    const prevVx = this.vx
 
     // Vertical physics (jumps / drops) - only on floor mode.
     if (this.airborne) {
       this.vy += GRAVITY * dt
       this.y += this.vy * dt
       if (this.y >= this.floorY()) {
+        this.impact = Math.max(0, this.vy)
+        this.landKey++
         this.y = this.floorY()
         this.vy = 0
         this.airborne = false
       }
     }
 
-    if (this.mode === 'none' || !this.target) {
-      this.vx = 0
-      return { arrived: false }
-    }
-
-    if (nowSeconds < this.pauseUntil) {
-      this.vx = 0
-      return { arrived: false }
-    }
-
     // Keep following the cursor while approaching it.
-    if (this.mode === 'toCursor') {
+    if (this.mode === 'toCursor' && this.target) {
       if (cursor) this.pickTarget('toCursor', rng, cursor)
-      else return { arrived: true }
+      else {
+        this.coast(dt, prevVx)
+        return { arrived: true }
+      }
+    }
+
+    const paused = nowSeconds < this.pauseUntil
+    if (this.mode === 'none' || !this.target || paused) {
+      this.coast(dt, prevVx)
+      return { arrived: false }
     }
 
     const dx = this.target.x - this.x
@@ -264,7 +325,6 @@ export class MovementEngine {
 
     if (dist <= stopDistance) {
       arrived = true
-      this.vx = 0
       if (this.mode === 'chase' && this.chaseHops > 0) {
         this.chaseHops--
         this.pauseUntil = nowSeconds + rng.range(0.15, 0.5)
@@ -279,6 +339,7 @@ export class MovementEngine {
         this.pickTarget('walk', rng, cursor)
         arrived = false
       }
+      this.coast(dt, prevVx)
       return { arrived }
     }
 
@@ -287,13 +348,53 @@ export class MovementEngine {
       this.pauseUntil = nowSeconds + rng.range(0.4, 1.2)
     }
 
-    const step = Math.min(dist, this.speed * dt)
-    this.x += (dx / dist) * step
-    if (!this.airborne) this.y += (dy / dist) * step
-    this.vx = (dx / dist) * this.speed
-    if (Math.abs(dx) > 2) this.facing = dx > 0 ? 1 : -1
+    // Ease out over the last stretch so the pet settles at its destination instead of overshooting.
+    const brake = Math.max(20, this.speed * 0.3)
+    const want = this.speed * Math.max(0.12, Math.min(1, dist / brake))
+    const ux = dx / dist
+    const uy = dy / dist
+    const accel = this.speed / ACCEL_TIME
+    this.vx = approach(this.vx, ux * want, accel * dt)
+    const stepX = this.vx * dt
+    this.x = Math.abs(stepX) >= Math.abs(dx) ? this.target.x : this.x + stepX
+    if (!this.airborne && dy !== 0) {
+      this.vyMove = approach(this.vyMove, uy * want, accel * dt)
+      const stepY = this.vyMove * dt
+      this.y = Math.abs(stepY) >= Math.abs(dy) ? this.target.y : this.y + stepY
+    } else this.vyMove = 0
+    this.updateFacing(dx)
+    this.trackAccel(prevVx, dt)
     this.clampToBounds()
     return { arrived }
+  }
+
+  /** No destination: brake to a stop with the momentum of the last movement. */
+  private coast(dt: number, prevVx: number): void {
+    const decel = Math.max(this.speed, 60) / BRAKE_TIME
+    this.vx = approach(this.vx, 0, decel * dt)
+    this.vyMove = approach(this.vyMove, 0, decel * dt)
+    if (this.vx !== 0) {
+      this.x += this.vx * dt
+      this.clampToBounds()
+    }
+    if (this.vyMove !== 0 && !this.airborne) {
+      this.y = Math.max(this.minY(), Math.min(this.floorY(), this.y + this.vyMove * dt))
+    }
+    this.updateFacing(0)
+    this.trackAccel(prevVx, dt)
+  }
+
+  /** Skid turn: while still sliding fast the pet faces the way it moves; once slow it faces its target. */
+  private updateFacing(dx: number): void {
+    if (Math.abs(this.vx) > TURN_SPEED) this.facing = this.vx > 0 ? 1 : -1
+    else if (Math.abs(dx) > 2) this.facing = dx > 0 ? 1 : -1
+  }
+
+  private trackAccel(prevVx: number, dt: number): void {
+    if (dt <= 0) return
+    const a = (this.vx - prevVx) / dt
+    this.accel += (a - this.accel) * Math.min(1, dt * 12)
+    if (Math.abs(this.accel) < 1) this.accel = 0
   }
 
   faceToward(x: number): void {
@@ -310,9 +411,13 @@ export class MovementEngine {
       x: this.x,
       y: this.y,
       facing: this.facing,
-      moving: this.mode !== 'none' && Math.abs(this.vx) > 1,
+      moving: Math.abs(this.vx) > 1 || Math.abs(this.vyMove) > 1,
       airborne: this.airborne,
-      speed: Math.abs(this.vx)
+      speed: Math.hypot(this.vx, this.vyMove),
+      accel: this.accel,
+      height: Math.max(0, this.floorY() - this.y),
+      impact: this.impact,
+      landKey: this.landKey
     }
   }
 }

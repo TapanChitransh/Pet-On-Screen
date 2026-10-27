@@ -32,6 +32,10 @@ export interface VisualState {
   paused: boolean
   /** mini-game HUD state (positions are written straight to the DOM, not here) */
   playMode: 'none' | 'fetch' | 'tug'
+  /** the pet stays where the user put it down */
+  perched: boolean
+  /** out of breath after running or playing: tongue out, quick shallow breaths */
+  panting: boolean
   playPhase: string | null
   playMessage: string
   tugRounds: { user: number; pet: number } | null
@@ -50,6 +54,20 @@ interface MotionParams {
   tailAmp: number
   tailHz: number
 }
+
+interface MotionEls {
+  root: HTMLElement | null
+  lean: HTMLElement | null
+  body: HTMLElement | null
+  tail: HTMLElement | null
+  head: HTMLElement | null
+  headMotion: HTMLElement | null
+  shadow: HTMLElement | null
+}
+
+/** Clips in which a pet with nothing to look at glances around on its own. */
+const GLANCE_CLIPS = new Set<PetSnapshot['animation']>(['idle', 'sit', 'watch', 'curious', 'tired', 'sad', 'happy'])
+const TWO_PI = Math.PI * 2
 
 /** Idle-motion parameters per clip. Tail droop poses are in CSS; here we only decide how much it sways. */
 function motionFor(animation: PetSnapshot['animation'], moving: boolean): MotionParams {
@@ -118,6 +136,7 @@ export class PetRuntime {
   private lastPush = 0
   private cursor: CursorInfo | null = null
   private lastVisualKey = ''
+  private panting = false
 
   constructor(boot: Bootstrap) {
     this.settings = boot.settings
@@ -153,7 +172,7 @@ export class PetRuntime {
 
   private buildEngine(pet: PetSave): PetEngine {
     const pos = this.storage.save.position
-    const position = pos ? { x: pos.fx * this.bounds.width, y: pos.fy * this.bounds.height } : null
+    const position = pos ? { x: pos.fx * this.bounds.width, y: pos.fy * this.bounds.height, perched: pos.perched ?? false } : null
     const engine = new PetEngine(
       pet,
       {
@@ -298,7 +317,7 @@ export class PetRuntime {
   private schedule(): void {
     const snap = this.snapshot
     const fast = snap.airborne || snap.speed > 120 || this.dragging || snap.play !== null
-    const active = snap.moving || ACTIVE_CLIPS.has(snap.animation)
+    const active = snap.moving || ACTIVE_CLIPS.has(snap.animation) || performance.now() < this.effectUntil || Math.abs(snap.lean) > 0.6 || snap.attention === 'ear'
     if (fast) this.raf = requestAnimationFrame(this.step)
     else this.timer = setTimeout(this.step, active ? 33 : 120)
   }
@@ -326,16 +345,35 @@ export class PetRuntime {
   private blinkUntil = 0
   private earAt = 0
   private earUntil = 0
-  private motionEls: { body: HTMLElement | null; tail: HTMLElement | null; head: HTMLElement | null } | null = null
+  /** Short-lived effects (landing squash, lean settling) keep the loop at 30Hz until this time. */
+  private effectUntil = 0
+  private lastFrameMs = 0
+  private breathPhase = 0
+  private breathJitter = 1
+  private lastLandKey = -1
+  private squashAmp = 0
+  private squashAt = 0
+  private lastLookDx = 0
+  /** Where the head is pointing; it trails the eyes by a few hundred milliseconds. */
+  private headLook = { dx: 0, dy: 0 }
+  private glance: { dx: number; dy: number } | null = null
+  private glanceAt = 0
+  private glanceUntil = 0
 
-  private els(): { body: HTMLElement | null; tail: HTMLElement | null; head: HTMLElement | null } {
+  private motionEls: MotionEls | null = null
+
+  private els(): MotionEls {
     const cached = this.motionEls
     if (cached && cached.body?.isConnected) return cached
     const root = this.frameEl
     this.motionEls = {
+      root: root?.querySelector<HTMLElement>('.sprite-wrap') ?? null,
+      lean: root?.querySelector<HTMLElement>('.pet-body') ?? null,
       body: root?.querySelector<HTMLElement>('.body .idle-motion') ?? null,
       tail: root?.querySelector<HTMLElement>('.tail .idle-motion') ?? null,
-      head: root?.querySelector<HTMLElement>('.part.head') ?? null
+      head: root?.querySelector<HTMLElement>('.part.head') ?? null,
+      headMotion: root?.querySelector<HTMLElement>('.part.head .idle-motion') ?? null,
+      shadow: root?.querySelector<HTMLElement>('.shadow-layer') ?? null
     }
     this.lastWritten = {}
     return this.motionEls
@@ -424,30 +462,108 @@ export class PetRuntime {
     }
     if (this.perfSkip.vars) return
 
-    // Idle motion: breathing, tail sway, blinking, ear twitches, eye tracking.
+    const dtF = this.lastFrameMs ? Math.min(0.25, (nowMs - this.lastFrameMs) / 1000) : 0
+    this.lastFrameMs = nowMs
+    const { lean, headMotion, shadow, root } = this.els()
+
+    // Body lean: into acceleration on the ground, swinging from the hand while carried.
+    const leanDeg = Math.round(snap.lean * 2) / 2
+    this.write(lean, 'leanOrigin', 'transform-origin', snap.state === 'DRAGGED' ? '50% 18%' : '50% 100%')
+    this.write(lean, 'lean', 'transform', leanDeg === 0 ? '' : `rotate(${leanDeg}deg)`)
+
+    // Contact shadow shrinks and fades with height above the ground.
+    if (snap.height > 0.5) {
+      const k = Math.max(0.35, 1 - snap.height / 420)
+      this.write(shadow, 'shadowT', 'transform', `scale(${k.toFixed(2)})`)
+      this.write(shadow, 'shadowO', 'opacity', (k * 0.9).toFixed(2))
+    } else {
+      this.write(shadow, 'shadowT', 'transform', '')
+      this.write(shadow, 'shadowO', 'opacity', '')
+    }
+
+    // Landing: a squash proportional to the impact that springs back over ~half a second.
+    if (snap.landKey !== this.lastLandKey) {
+      if (this.lastLandKey >= 0 && snap.impact > 150) {
+        this.squashAmp = Math.min(0.28, snap.impact / 1400)
+        this.squashAt = nowMs
+        this.effectUntil = nowMs + 650
+      }
+      this.lastLandKey = snap.landKey
+    }
+    let squash = 0
+    if (this.squashAmp > 0) {
+      const ts = (nowMs - this.squashAt) / 1000
+      squash = this.squashAmp * Math.exp(-ts * 9) * Math.cos(ts * 24)
+      if (ts > 0.6) this.squashAmp = 0
+    }
+
+    // Stride length follows actual speed so the feet stop sliding over the ground.
+    if ((snap.animation === 'walk' || snap.animation === 'run') && snap.speed > 1) {
+      const mv = this.engine.species.movement
+      const ref = (snap.animation === 'run' ? mv.runSpeed : mv.walkSpeed) * this.settings.petScale
+      const stride = Math.round(Math.max(0.6, Math.min(1.8, ref / snap.speed)) * 10) / 10
+      this.write(root, 'stride', '--stride', stride.toString())
+    }
+
+    // Breathing: rate and depth per clip, faster and shallower when out of breath, and each breath a
+    // slightly different length (a perfect sine reads as a machine).
     const t = nowMs / 1000
     const m = motionFor(snap.animation, snap.moving)
-    const breathe = 1 + m.breatheAmp * (0.5 + 0.5 * Math.sin(t * m.breatheHz * Math.PI * 2))
-    this.write(body, 'breathe', 'transform', `scale(1, ${breathe.toFixed(4)})`)
+    const hz = m.breatheHz + (snap.animation === 'sleep' ? 0 : snap.exertion * 2.2)
+    const amp = m.breatheAmp + snap.exertion * 0.015
+    this.breathPhase += dtF * hz * this.breathJitter * TWO_PI
+    if (this.breathPhase >= TWO_PI) {
+      this.breathPhase -= TWO_PI
+      this.breathJitter = 0.85 + Math.random() * 0.3
+    }
+    const breathe = 1 + amp * (0.5 + 0.5 * Math.sin(this.breathPhase))
+    this.write(body, 'breathe', 'transform', `scale(${(1 + squash * 0.9).toFixed(4)}, ${(breathe - squash).toFixed(4)})`)
     const sway = m.tailAmp * Math.sin(t * m.tailHz * Math.PI * 2)
     this.write(tail, 'tail', 'transform', `rotate(${sway.toFixed(1)}deg)`)
 
-    if (nowMs >= this.blinkAt) {
-      this.blinkUntil = nowMs + 140
-      this.blinkAt = nowMs + (Math.random() < 0.2 ? 380 : 2500 + Math.random() * 4500)
+    // Gaze: the cursor if the pet has noticed it, otherwise the occasional glance around the room.
+    let look = snap.lookAt
+    if (!look && !snap.moving && GLANCE_CLIPS.has(snap.animation)) {
+      if (nowMs >= this.glanceAt) {
+        this.glance = { dx: Math.random() * 1.6 - 0.8, dy: Math.random() * 0.9 - 0.4 }
+        this.glanceUntil = nowMs + 700 + Math.random() * 1800
+        this.glanceAt = this.glanceUntil + 4000 + Math.random() * 10000
+      }
+      if (nowMs < this.glanceUntil) look = this.glance
     }
+
+    // Blinks: more often and longer when tired, and one on every big shift of gaze.
+    const tired = snap.animation === 'tired' || snap.stats.energy < 30
+    if (nowMs >= this.blinkAt) {
+      this.blinkUntil = nowMs + (tired ? 230 : 140)
+      this.blinkAt = nowMs + (Math.random() < 0.2 ? 380 : tired ? 1200 + Math.random() * 2000 : 2500 + Math.random() * 4500)
+    }
+    const lookDx = look ? look.dx : 0
+    if (Math.abs(lookDx - this.lastLookDx) > 0.5 && nowMs > this.blinkUntil + 300) this.blinkUntil = nowMs + 120
+    this.lastLookDx = lookDx
     this.write(head, 'blink', '--blink', nowMs < this.blinkUntil ? '1' : '0')
 
+    // Ears: random twitches, a perk the moment something is noticed, held slightly up while watching.
     if (nowMs >= this.earAt) {
       this.earUntil = nowMs + 320
       this.earAt = nowMs + 5000 + Math.random() * 9000
     }
     const earPhase = nowMs < this.earUntil ? (this.earUntil - nowMs) / 320 : 0
-    this.write(head, 'ear', '--ear', earPhase === 0 ? '0deg' : earPhase > 0.5 ? '-14deg' : '6deg')
+    let ear = earPhase === 0 ? '0deg' : earPhase > 0.5 ? '-14deg' : '6deg'
+    if (snap.attention === 'ear') ear = '-16deg'
+    else if (snap.attention === 'look' && earPhase === 0) ear = '-5deg'
+    this.write(head, 'ear', '--ear', ear)
 
-    const look = snap.lookAt
+    // Eyes move first; the head follows a beat later.
     this.write(head, 'lx', '--look-x', look ? (Math.round(look.dx * 10) / 10).toString() : '0')
     this.write(head, 'ly', '--look-y', look ? (Math.round(look.dy * 10) / 10).toString() : '0')
+    // Converges in ~4 writes at the idle tick rate; it deliberately does not raise the tick rate.
+    const follow = 1 - Math.exp(-dtF * 6)
+    this.headLook.dx += ((look?.dx ?? 0) - this.headLook.dx) * follow
+    this.headLook.dy += ((look?.dy ?? 0) - this.headLook.dy) * follow
+    const hx = Math.round(this.headLook.dx * 10) / 10
+    const hy = Math.round(this.headLook.dy * 10) / 10
+    this.write(headMotion, 'headlook', 'transform', hx === 0 && hy === 0 ? '' : `rotate(${(hy * 6 - hx * 2).toFixed(1)}deg) translate(${(hx * 2).toFixed(1)}%, ${(hy * 1.5).toFixed(1)}%)`)
   }
 
   private toVisual(snap: PetSnapshot): VisualState {
@@ -474,6 +590,8 @@ export class PetRuntime {
       scale: this.settings.petScale,
       paused: this.settings.paused,
       playMode: snap.play?.mode ?? 'none',
+      perched: snap.perched,
+      panting: this.panting,
       playPhase: snap.play?.phase ?? null,
       playMessage: snap.play?.message ?? '',
       tugRounds: snap.play?.tug ? { ...snap.play.tug.rounds } : null,
@@ -483,6 +601,9 @@ export class PetRuntime {
   }
 
   private updateVisual(snap: PetSnapshot, force = false): void {
+    // Hysteresis so the tongue does not flicker in and out around the threshold.
+    if (snap.exertion > 0.55) this.panting = true
+    else if (snap.exertion < 0.3) this.panting = false
     const v = this.toVisual(snap)
     const key = JSON.stringify(v)
     if (!force && key === this.lastVisualKey) return
@@ -615,6 +736,12 @@ export class PetRuntime {
     this.dragging = false
     this.engine.dragEnd()
     this.syncMouse()
+    this.kick()
+  }
+
+  /** Let a pet that was put down somewhere wander the whole screen again. */
+  releasePerch(): void {
+    this.engine.releasePerch()
     this.kick()
   }
 
