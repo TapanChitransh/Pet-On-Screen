@@ -160,7 +160,7 @@ macOS apps can only be built, signed and notarized on macOS. Two ways to do that
 
 ### B. Build in GitHub Actions (no Mac needed)
 
-`.github/workflows/mac-release.yml` builds, signs and notarizes on a macOS runner and attaches the
+`.github/workflows/release.yml` at the repository root builds the Windows installer and the macOS DMGs on GitHub runners, signs and notarizes the Mac build when the secrets exist, and attaches the
 DMGs to a GitHub Release.
 
 1. Push the project to a GitHub repository.

@@ -1,0 +1,914 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="PetOnScreen is a free, open-source desktop pet for Windows and macOS. Max walks along the bottom of your screen while you work, naps, plays fetch, and asks you to take a break.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://petonscreen.vercel.app/">
+<meta property="og:title" content="PetOnScreen: a pet that lives on top of your screen">
+<meta property="og:description" content="Free desktop pet for Windows and macOS. He walks, naps, looks at your cursor, plays fetch, and stays out of the way. Everything under him stays clickable.">
+<meta property="og:image" content="https://petonscreen.vercel.app/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="PetOnScreen: a pet that lives on top of your screen">
+<meta name="twitter:description" content="Free desktop pet for Windows and macOS. He walks, naps, looks at your cursor, plays fetch, and stays out of the way.">
+<meta name="twitter:image" content="https://petonscreen.vercel.app/og.png">
+<link rel="icon" href="/favicon.png" type="image/png">
+<meta name="theme-color" content="#111115">
+<title>PetOnScreen</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Nunito:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout concept: the hero is a fake monitor where the app's own rendered Max walks around;
+   everything below is a product sheet set in the app's own dark UI (charcoal, orange paw, purple accents). */
+:root {
+  --bg: #111115;
+  --bg-2: #18181f;
+  --bg-3: #212129;
+  --bg-4: #2a2a35;
+  --line: #2c2c38;
+  --line-2: #3a3a48;
+  --fg: #f4f0e8;
+  --fg-2: #b9b4aa;
+  --fg-3: #837f78;
+  --accent: #ff8c42;
+  --accent-deep: #e8702a;
+  --accent-soft: rgba(255, 140, 66, 0.14);
+  --paw: #8f7ff5;
+  --paw-soft: rgba(143, 127, 245, 0.16);
+  --good: #4ade80;
+  --warn: #fbbf24;
+  --bubble: #fbf7ee;
+  --bubble-fg: #2b2730;
+  --wall-1: #1c2140;
+  --wall-2: #3a2a5c;
+  --wall-3: #0d1023;
+  --display: "Fredoka", "Nunito", "Segoe UI", system-ui, sans-serif;
+  --body: "Nunito", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --mono: "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  --radius: 14px;
+  --max: 1120px;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--body);
+  font-size: 17px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 50; background: var(--bg); }
+img { max-width: 100%; display: block; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 6px; }
+h1, h2, h3 { font-family: var(--display); line-height: 1.1; margin: 0; text-wrap: balance; font-weight: 600; }
+h2 { font-size: clamp(1.9rem, 3.6vw, 2.7rem); letter-spacing: -0.01em; }
+h3 { font-size: 1.25rem; }
+p { margin: 0; }
+code, kbd { font-family: var(--mono); font-size: 0.86em; background: var(--bg-3); border: 1px solid var(--line); border-radius: 6px; padding: 0.1em 0.4em; color: var(--fg); }
+pre { font-family: var(--mono); font-size: 0.84rem; background: var(--bg-3); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; overflow-x: auto; margin: 0; color: var(--fg); }
+pre code { background: none; border: 0; padding: 0; }
+.wrap { max-width: var(--max); margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.eyebrow { font-family: var(--display); font-weight: 600; font-size: 0.8rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); }
+.lede { font-size: 1.15rem; color: var(--fg-2); max-width: 62ch; }
+.muted { color: var(--fg-2); }
+.small { font-size: 0.9rem; }
+section { padding-block: clamp(56px, 8vw, 104px); }
+section + section { border-top: 1px solid var(--line); }
+.sec-head { display: grid; gap: 14px; margin-bottom: clamp(28px, 4vw, 44px); max-width: 70ch; }
+
+/* ---------- nav ---------- */
+.nav { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 40; background: rgba(17, 17, 21, 0.86); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border-bottom: 1px solid var(--line); }
+.nav .wrap { display: flex; align-items: center; gap: 22px; height: 60px; }
+.brand { display: flex; align-items: center; gap: 10px; font-family: var(--display); font-weight: 700; font-size: 1.15rem; color: var(--fg); }
+.brand:hover { text-decoration: none; }
+.brand .paw { width: 30px; height: 30px; border-radius: 8px; background: linear-gradient(180deg, #ff9b4e, #ee7a2f); display: grid; place-items: center; box-shadow: 0 2px 8px rgba(255, 140, 66, 0.35); }
+.brand .paw svg { width: 18px; height: 18px; }
+.nav-links { display: flex; gap: 20px; margin-left: auto; font-weight: 600; font-size: 0.95rem; }
+.nav-links a { color: var(--fg-2); }
+.nav-links a:hover { color: var(--fg); text-decoration: none; }
+.nav .btn { margin-left: 8px; }
+@media (max-width: 760px) { .nav-links { display: none; } .nav .btn { margin-left: auto; } }
+
+/* ---------- buttons ---------- */
+.btn { display: inline-flex; align-items: center; gap: 10px; font-family: var(--display); font-weight: 600; font-size: 1rem; padding: 12px 20px; border-radius: 12px; border: 1px solid transparent; cursor: pointer; transition: transform 0.12s ease, background 0.15s ease, border-color 0.15s ease; white-space: nowrap; line-height: 1.2; }
+.btn:hover { text-decoration: none; transform: translateY(-1px); }
+.btn:active { transform: translateY(0); }
+.btn-primary { background: linear-gradient(180deg, #ff9b4e, var(--accent-deep)); color: #1a1208; box-shadow: 0 6px 20px rgba(255, 140, 66, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.25); }
+.btn-primary:hover { background: linear-gradient(180deg, #ffa75f, #f0783a); }
+.btn-ghost { background: var(--bg-3); color: var(--fg); border-color: var(--line-2); }
+.btn-ghost:hover { background: var(--bg-4); }
+.btn-sm { padding: 9px 14px; font-size: 0.92rem; border-radius: 10px; }
+.btn svg { width: 20px; height: 20px; flex: none; }
+.btn .sub { font-family: var(--body); font-weight: 600; font-size: 0.78rem; opacity: 0.75; margin-left: -4px; }
+
+/* ---------- hero ---------- */
+.hero { padding-block: clamp(40px, 6vw, 72px) clamp(24px, 4vw, 40px); position: relative; overflow: hidden; }
+.hero::before { content: ""; position: absolute; inset: -40% -20% auto; height: 70%; background: radial-gradient(60% 60% at 50% 40%, rgba(143, 127, 245, 0.16), transparent 70%), radial-gradient(40% 50% at 70% 60%, rgba(255, 140, 66, 0.14), transparent 70%); pointer-events: none; }
+.hero .wrap { position: relative; display: grid; gap: 28px; }
+.hero-top { display: grid; gap: 20px; max-width: 760px; }
+.hero h1 { font-size: clamp(2.5rem, 6.4vw, 4.8rem); font-weight: 700; letter-spacing: -0.015em; }
+.hero h1 em { font-style: normal; color: var(--accent); }
+.hero .lede { font-size: clamp(1.05rem, 1.6vw, 1.25rem); }
+.cta-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.cta-note { display: flex; flex-wrap: wrap; gap: 8px 18px; color: var(--fg-3); font-size: 0.9rem; }
+.cta-note span::before { content: "✓ "; color: var(--good); }
+
+/* ---------- the fake desktop ---------- */
+.demo { display: grid; gap: 12px; }
+.demo-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.demo-bar .hint { color: var(--fg-2); font-size: 0.95rem; }
+.demo-bar .hint b { color: var(--fg); font-weight: 700; }
+.seg { margin-left: auto; display: inline-flex; background: var(--bg-3); border: 1px solid var(--line-2); border-radius: 10px; padding: 3px; gap: 2px; }
+.seg button { font: inherit; font-family: var(--display); font-weight: 600; font-size: 0.9rem; color: var(--fg-2); background: none; border: 0; border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--bg-4); color: var(--fg); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4); }
+.desk { container-type: inline-size; position: relative; aspect-ratio: 16 / 10; max-width: 100%; width: 100%; border-radius: 16px; overflow: hidden; border: 1px solid var(--line-2); box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55), 0 0 0 6px #0b0b0e, 0 0 0 7px #2b2b36; background: radial-gradient(120% 90% at 20% 10%, var(--wall-2), transparent 55%), radial-gradient(90% 80% at 85% 90%, #2a3d78, transparent 60%), linear-gradient(160deg, var(--wall-1), var(--wall-3)); --k: 0.085cqw; --floor: 5.1cqw; user-select: none; -webkit-user-select: none; touch-action: manipulation; }
+@media (max-width: 560px) { .desk { --k: 0.11cqw; border-radius: 10px; } }
+.desk[data-os="mac"] { --floor: 7.4cqw; }
+.desk * { pointer-events: none; }
+.desk .pet { pointer-events: auto; }
+/* windows */
+.win { position: absolute; border-radius: 0.9cqw; background: #1b1b22; border: 1px solid rgba(255, 255, 255, 0.08); box-shadow: 0 1.2cqw 3cqw rgba(0, 0, 0, 0.45); overflow: hidden; font-size: 1.15cqw; line-height: 1.55; }
+.win .tb { height: 3.2cqw; display: flex; align-items: center; gap: 0.7cqw; padding: 0 1cqw; background: #24242d; border-bottom: 1px solid rgba(255, 255, 255, 0.06); color: #bdb8ae; font-family: var(--body); font-weight: 600; }
+.win .tb .dots { display: none; gap: 0.55cqw; }
+.win .tb .dots i { width: 1.05cqw; height: 1.05cqw; border-radius: 50%; display: block; }
+.win .tb .ctl { display: flex; gap: 1.3cqw; margin-left: auto; color: #9b968d; font-size: 1.1cqw; letter-spacing: 0.1em; }
+.desk[data-os="mac"] .win .tb .dots { display: flex; }
+.desk[data-os="mac"] .win .tb .ctl { display: none; }
+.desk[data-os="mac"] .win .tb .title { margin: 0 auto; }
+.win .tb .title { white-space: nowrap; }
+.win.editor { left: 4.5cqw; top: 8cqw; width: 56cqw; height: 42cqw; }
+.desk[data-os="mac"] .win.editor { top: 7.6cqw; }
+.editor .code { padding: 1cqw 1.4cqw; font-family: var(--mono); font-size: 1.12cqw; color: #cfcbc2; white-space: pre; counter-reset: ln; }
+.editor .code > span { display: block; }
+.editor .code > span::before { counter-increment: ln; content: counter(ln); display: inline-block; width: 2.4cqw; color: #5a5a68; }
+.kw { color: #c792ea; } .fn { color: #82aaff; } .st { color: #c3e88d; } .cm { color: #6a6a7a; font-style: italic; } .nu { color: #f78c6c; }
+.win.notes { right: 4.5cqw; top: 20cqw; width: 30cqw; height: 27cqw; }
+.notes ul { list-style: none; margin: 0; padding: 1cqw 1.4cqw; display: grid; gap: 0.6cqw; color: #cfcbc2; }
+.notes li { display: flex; gap: 0.8cqw; align-items: center; }
+.notes li i { width: 1.4cqw; height: 1.4cqw; border: 1px solid #6a6a7a; border-radius: 0.35cqw; display: grid; place-items: center; font-style: normal; font-size: 1cqw; color: var(--good); }
+.notes li.done { color: #7e7a73; text-decoration: line-through; }
+.notes li.done i { border-color: var(--good); }
+/* bars */
+.menubar { position: absolute; inset: 0 0 auto; height: 2.6cqw; background: rgba(20, 20, 28, 0.72); backdrop-filter: blur(6px); display: none; align-items: center; padding: 0 1.4cqw; gap: 1.6cqw; font-size: 1.15cqw; font-weight: 600; color: #e8e4dc; }
+.menubar .right { margin-left: auto; display: flex; gap: 1.2cqw; align-items: center; }
+.menubar .pawmark { color: var(--accent); }
+.desk[data-os="mac"] .menubar { display: flex; }
+.taskbar { position: absolute; inset: auto 0 0; height: 5cqw; background: rgba(22, 22, 30, 0.9); backdrop-filter: blur(8px); border-top: 1px solid rgba(255, 255, 255, 0.07); display: flex; align-items: center; justify-content: center; gap: 1.1cqw; }
+.taskbar .start { width: 3cqw; height: 3cqw; display: grid; grid-template-columns: 1fr 1fr; gap: 0.25cqw; padding: 0.6cqw; }
+.taskbar .start i { background: #4cc2ff; border-radius: 0.15cqw; }
+.taskbar .search { height: 3.2cqw; width: 18cqw; border-radius: 1.6cqw; background: rgba(255, 255, 255, 0.08); display: flex; align-items: center; padding: 0 1.1cqw; gap: 0.7cqw; color: #a9a49b; font-size: 1.15cqw; }
+.taskbar .app { width: 3cqw; height: 3cqw; border-radius: 0.6cqw; display: grid; place-items: center; }
+.taskbar .app.on { background: rgba(255, 255, 255, 0.09); box-shadow: inset 0 -0.25cqw 0 #4cc2ff; }
+.taskbar .tray { position: absolute; right: 1.2cqw; top: 0; bottom: 0; display: flex; align-items: center; gap: 1cqw; font-size: 1.05cqw; color: #cfcbc2; }
+.taskbar .tray .pawmark { color: var(--accent); }
+.desk[data-os="mac"] .taskbar { display: none; }
+.dock { position: absolute; left: 50%; bottom: 1cqw; transform: translateX(-50%); height: 5.6cqw; padding: 0 0.9cqw; border-radius: 1.5cqw; background: rgba(40, 40, 56, 0.6); border: 1px solid rgba(255, 255, 255, 0.12); backdrop-filter: blur(10px); display: none; align-items: center; gap: 0.9cqw; }
+.dock .app { width: 4cqw; height: 4cqw; border-radius: 1cqw; }
+.dock .sep { width: 1px; height: 3.4cqw; background: rgba(255, 255, 255, 0.15); margin: 0 0.3cqw; }
+.desk[data-os="mac"] .dock { display: flex; }
+.ic-blue { background: linear-gradient(160deg, #5aa9ff, #2a6fd6); } .ic-green { background: linear-gradient(160deg, #6ee7a7, #1f9e5c); } .ic-pink { background: linear-gradient(160deg, #f99bd0, #c2399c); } .ic-grey { background: linear-gradient(160deg, #cfd3dc, #8d94a3); } .ic-orange { background: linear-gradient(160deg, #ffb070, #e8702a); } .ic-yellow { background: linear-gradient(160deg, #ffe08a, #e6a800); }
+.app svg { width: 60%; height: 60%; }
+/* the pet */
+.pet { position: absolute; left: 0; bottom: var(--floor); width: 0; height: 0; cursor: grab; z-index: 5; }
+.pet .body { position: absolute; left: 0; bottom: 0; transform-origin: 50% 100%; will-change: transform; }
+.pet .body img { position: absolute; left: 0; bottom: 0; transform: translateX(-50%); max-width: none; height: auto; image-rendering: auto; filter: drop-shadow(0 0.3cqw 0.6cqw rgba(0, 0, 0, 0.25)); }
+.pet .body img:not(.on) { visibility: hidden; }
+.pet .hit { position: absolute; left: 0; bottom: 0; transform: translateX(-50%); width: calc(150 * var(--k)); height: calc(120 * var(--k)); pointer-events: auto; }
+.bubble { position: absolute; bottom: calc(142 * var(--k)); left: 0; transform: translate(-50%, 6px) scale(0.9); transform-origin: 50% 100%; background: var(--bubble); color: var(--bubble-fg); font-family: var(--body); font-weight: 700; font-size: clamp(11px, 1.55cqw, 17px); padding: 0.55em 1em; border-radius: 1.2em; white-space: nowrap; box-shadow: 0 0.4cqw 1.2cqw rgba(0, 0, 0, 0.3); opacity: 0; transition: opacity 0.18s ease, transform 0.18s ease; pointer-events: none; }
+.bubble::after { content: ""; position: absolute; left: 50%; bottom: -0.55em; width: 0.9em; height: 0.9em; background: var(--bubble); transform: translateX(-50%) rotate(45deg); border-radius: 0.15em; }
+.bubble.show { opacity: 1; transform: translate(-50%, 0) scale(1); }
+.fx { position: absolute; left: 0; bottom: calc(110 * var(--k)); transform: translateX(-50%); font-size: clamp(12px, 2cqw, 20px); font-weight: 700; color: #ff6f91; pointer-events: none; animation: rise 1.3s ease-out forwards; }
+.fx.z { color: #a9b6ff; font-family: var(--display); }
+@keyframes rise { from { opacity: 1; transform: translate(-50%, 0) } to { opacity: 0; transform: translate(calc(-50% + var(--dx, 0px)), -3.5em) } }
+.demo-caption { color: var(--fg-3); font-size: 0.88rem; max-width: 80ch; }
+
+/* ---------- download block ---------- */
+.dl-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+.dl { display: grid; gap: 10px; padding: 18px; border-radius: var(--radius); background: var(--bg-2); border: 1px solid var(--line); }
+.dl .os { display: flex; align-items: center; gap: 10px; font-family: var(--display); font-weight: 600; font-size: 1.1rem; }
+.dl .os svg { width: 22px; height: 22px; }
+.dl .file { font-family: var(--mono); font-size: 0.78rem; color: var(--fg-3); word-break: break-all; }
+.dl .btn { justify-content: center; }
+
+/* ---------- feature tiles ---------- */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.tile { background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 22px; display: grid; gap: 12px; align-content: start; min-width: 0; }
+.tile h3 { font-size: 1.3rem; }
+.tile p { color: var(--fg-2); font-size: 0.98rem; }
+.tile .art { height: 120px; display: flex; align-items: flex-end; gap: 10px; justify-content: center; background: radial-gradient(70% 60% at 50% 100%, rgba(255, 140, 66, 0.12), transparent 70%); border-radius: 10px; padding: 8px; }
+.tile .art img { height: 100px; width: auto; }
+.tile .art.wide img { height: 92px; }
+.tile .art .arrow { color: var(--fg-3); font-size: 1.4rem; align-self: center; }
+.tile .art figure { margin: 0; display: grid; justify-items: center; gap: 4px; }
+.tile .art figcaption { font-size: 0.72rem; color: var(--fg-3); font-family: var(--mono); }
+.tile .art .fact { align-self: center; font-family: var(--mono); font-size: 0.78rem; color: var(--fg-2); background: var(--bg-3); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+.tile .tag { justify-self: start; font-size: 0.72rem; font-family: var(--display); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--paw); background: var(--paw-soft); border-radius: 6px; padding: 3px 8px; }
+
+/* ---------- pose strip ---------- */
+.strip { display: flex; gap: 10px; overflow-x: auto; padding: 6px 2px 14px; scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; }
+.strip figure { flex: 0 0 auto; margin: 0; width: 132px; scroll-snap-align: start; background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 10px 8px 8px; display: grid; justify-items: center; gap: 6px; }
+.strip img { height: 84px; width: auto; }
+.strip figcaption { font-family: var(--display); font-weight: 600; font-size: 0.85rem; color: var(--fg-2); }
+.strip-note { color: var(--fg-3); font-size: 0.9rem; }
+
+/* ---------- games ---------- */
+.games { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.game { display: grid; grid-template-rows: auto 1fr; background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; min-width: 0; }
+.game .shot { background: radial-gradient(80% 80% at 50% 100%, #2a2f55, #15172a); display: grid; place-items: end center; height: 240px; padding: 16px; }
+.game .shot img { max-height: 210px; width: auto; }
+.game .txt { padding: 20px 22px 24px; display: grid; gap: 10px; align-content: start; }
+.game .txt p { color: var(--fg-2); font-size: 0.98rem; }
+.game .hud { display: inline-flex; align-items: center; gap: 10px; background: #26262f; border-radius: 999px; padding: 6px 8px 6px 14px; font-weight: 700; font-size: 0.9rem; justify-self: start; }
+.game .hud b { background: var(--accent); color: #1a1208; border-radius: 999px; padding: 4px 12px; font-family: var(--display); }
+
+/* ---------- species ---------- */
+.species { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 12px; }
+.sp { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 12px 10px 10px; display: grid; justify-items: center; gap: 6px; text-align: center; transition: transform 0.15s ease, border-color 0.15s ease; }
+.sp:hover { transform: translateY(-3px); border-color: var(--line-2); }
+.sp .frame { height: 96px; display: grid; place-items: end center; }
+.sp img { max-height: 96px; width: auto; }
+.sp b { font-family: var(--display); font-weight: 600; font-size: 0.95rem; }
+.sp small { color: var(--fg-3); font-size: 0.74rem; line-height: 1.3; }
+.sp.human { border-color: rgba(143, 127, 245, 0.4); }
+
+/* ---------- screenshots ---------- */
+.shots { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; align-items: start; }
+.shot-card { display: grid; gap: 10px; min-width: 0; }
+.shot-card .img { border-radius: 12px; border: 1px solid var(--line-2); overflow: hidden; box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45); }
+.shot-card p { color: var(--fg-2); font-size: 0.95rem; }
+.shot-card p b { color: var(--fg); }
+
+/* ---------- two-col prose blocks ---------- */
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 28px 40px; }
+.cols > div { min-width: 0; display: grid; gap: 12px; align-content: start; }
+.cols p { color: var(--fg-2); }
+.cols ul { margin: 0; padding-left: 20px; color: var(--fg-2); display: grid; gap: 6px; }
+.cols li b { color: var(--fg); }
+table { border-collapse: collapse; width: 100%; font-size: 0.95rem; }
+th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-family: var(--display); font-weight: 600; color: var(--fg-2); font-size: 0.85rem; letter-spacing: 0.04em; }
+td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tbl-wrap { overflow-x: auto; }
+.note { border-left: 3px solid var(--paw); background: var(--paw-soft); padding: 12px 16px; border-radius: 0 10px 10px 0; color: var(--fg-2); font-size: 0.95rem; }
+.note b { color: var(--fg); }
+
+/* ---------- install ---------- */
+.install { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+.inst { background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 22px; display: grid; gap: 14px; align-content: start; min-width: 0; }
+.inst h3 { display: flex; align-items: center; gap: 10px; }
+.inst h3 svg { width: 22px; height: 22px; }
+.inst ol { margin: 0; padding-left: 22px; display: grid; gap: 10px; color: var(--fg-2); }
+.inst ol li::marker { color: var(--accent); font-weight: 700; }
+.inst li b { color: var(--fg); }
+.warn { display: flex; gap: 10px; background: rgba(251, 191, 36, 0.09); border: 1px solid rgba(251, 191, 36, 0.3); border-radius: 10px; padding: 10px 12px; font-size: 0.9rem; color: var(--fg-2); }
+.warn::before { content: "!"; flex: none; width: 20px; height: 20px; border-radius: 50%; background: var(--warn); color: #1a1208; font-weight: 800; display: grid; place-items: center; font-size: 0.8rem; margin-top: 2px; }
+.req { display: flex; flex-wrap: wrap; gap: 8px; }
+.req span { font-size: 0.82rem; background: var(--bg-3); border: 1px solid var(--line); border-radius: 999px; padding: 4px 11px; color: var(--fg-2); }
+
+/* ---------- test checklist ---------- */
+.checks { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+.chk { display: flex; gap: 12px; align-items: flex-start; background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; color: var(--fg-2); font-size: 0.97rem; }
+.chk i { flex: none; width: 22px; height: 22px; border-radius: 6px; border: 2px solid var(--line-2); margin-top: 2px; }
+.chk b { color: var(--fg); }
+.share { display: grid; gap: 14px; background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 22px; margin-top: 24px; }
+.share .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.share textarea { width: 100%; min-height: 84px; resize: vertical; font: inherit; font-size: 0.95rem; color: var(--fg); background: var(--bg-3); border: 1px solid var(--line-2); border-radius: 10px; padding: 10px 12px; }
+.toast { font-size: 0.9rem; color: var(--good); min-height: 1.4em; }
+
+/* ---------- roadmap ---------- */
+.road { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.road div { background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 22px; display: grid; gap: 10px; align-content: start; min-width: 0; }
+.road ul { margin: 0; padding-left: 20px; color: var(--fg-2); display: grid; gap: 5px; font-size: 0.97rem; }
+.road .ok { color: var(--good); }
+.road .plan { color: var(--warn); }
+
+/* ---------- footer ---------- */
+footer { border-top: 1px solid var(--line); padding-block: 36px 48px; color: var(--fg-3); font-size: 0.9rem; }
+footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 28px; align-items: center; }
+footer a { color: var(--fg-2); }
+
+@media (prefers-reduced-motion: reduce) {
+  .btn, .sp { transition: none; }
+  .fx { animation: none; opacity: 0; }
+}
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="#top" aria-label="PetOnScreen home">
+      <span class="paw" aria-hidden="true"><svg viewBox="0 0 24 24" fill="#fff8ef"><circle cx="6.2" cy="9.3" r="2.3"/><circle cx="10.4" cy="5.9" r="2.4"/><circle cx="15.5" cy="6.3" r="2.4"/><circle cx="19.1" cy="10.3" r="2.1"/><ellipse cx="12.6" cy="15.2" rx="5.2" ry="4.6"/></svg></span>
+      PetOnScreen
+    </a>
+    <nav class="nav-links" aria-label="Sections">
+      <a href="#life">What he does</a>
+      <a href="#characters">Characters</a>
+      <a href="#quiet">Performance</a>
+      <a href="#install">Install</a>
+      <a href="#test">Help test</a>
+    </nav>
+    <a class="btn btn-primary btn-sm" href="#download">Download</a>
+  </div>
+</header>
+
+<main id="top">
+<section class="hero">
+  <div class="wrap">
+    <div class="hero-top">
+      <div class="eyebrow">v0.1.0 public test · Windows and macOS · free and open source</div>
+      <h1>A pet that lives <em>on top</em> of your screen.</h1>
+      <p class="lede">Max walks along the bottom of your desktop while you work. He naps, looks at your cursor, plays fetch, brings you things he found, and asks you to take a break. Everything under him stays clickable.</p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="https://github.com/TapanChitransh/Proj/releases/latest/download/PetOnScreen-Setup-0.1.0.exe"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 5.5 10.5 4.4v7.1H3zM11.6 4.2 21 3v8.5h-9.4zM3 12.5h7.5v7.1L3 18.5zM11.6 12.5H21V21l-9.4-1.3z"/></svg>Download for Windows</a>
+        <a class="btn btn-ghost" href="https://github.com/TapanChitransh/Proj/releases/latest/download/PetOnScreen-0.1.0-arm64.dmg"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16.4 12.6c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.8-1.4-.1-2.8.9-3.5.9-.7 0-1.8-.8-3-.8-1.5 0-3 .9-3.8 2.3-1.6 2.8-.4 7 1.2 9.3.8 1.1 1.7 2.4 2.9 2.3 1.2 0 1.6-.8 3-.8s1.8.8 3 .7c1.3 0 2-1.1 2.8-2.3.9-1.3 1.2-2.6 1.3-2.6-.1 0-2.5-.9-2.5-3.7zM14.1 5.8c.6-.8 1.1-1.9 1-3-.9 0-2.1.6-2.7 1.4-.6.7-1.1 1.8-1 2.9 1 .1 2.1-.5 2.7-1.3z"/></svg>Mac <span class="sub">Apple Silicon</span></a>
+        <a class="btn btn-ghost" href="https://github.com/TapanChitransh/Proj/releases/latest/download/PetOnScreen-0.1.0-x64.dmg"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16.4 12.6c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.8-1.4-.1-2.8.9-3.5.9-.7 0-1.8-.8-3-.8-1.5 0-3 .9-3.8 2.3-1.6 2.8-.4 7 1.2 9.3.8 1.1 1.7 2.4 2.9 2.3 1.2 0 1.6-.8 3-.8s1.8.8 3 .7c1.3 0 2-1.1 2.8-2.3.9-1.3 1.2-2.6 1.3-2.6-.1 0-2.5-.9-2.5-3.7zM14.1 5.8c.6-.8 1.1-1.9 1-3-.9 0-2.1.6-2.7 1.4-.6.7-1.1 1.8-1 2.9 1 .1 2.1-.5 2.7-1.3z"/></svg>Mac <span class="sub">Intel</span></a>
+      </div>
+      <div class="cta-note"><span>No account</span><span>No ads or telemetry</span><span>One local save file</span><span>MIT licensed</span></div>
+    </div>
+
+    <div class="demo">
+      <div class="demo-bar">
+        <p class="hint"><b>Live.</b> These are frames rendered by the app itself. Move your cursor near Max. Click him.</p>
+        <div class="seg" role="group" aria-label="Desktop style">
+          <button type="button" id="os-win" aria-pressed="true">Windows</button>
+          <button type="button" id="os-mac" aria-pressed="false">macOS</button>
+        </div>
+      </div>
+      <div class="desk" id="desk" data-os="win" aria-label="A desktop with Max the golden retriever walking along the bottom">
+        <div class="menubar"><span class="pawmark">🐾</span><span>Finder</span><span>File</span><span>Edit</span><span>View</span><div class="right"><span>Tue 9:41 AM</span></div></div>
+        <div class="win editor">
+          <div class="tb"><span class="dots" aria-hidden="true"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></span><span class="title">PetEngine.ts — petonscreen</span><span class="ctl" aria-hidden="true">— ☐ ✕</span></div>
+<div class="code" aria-hidden="true"><span><span class="kw">export</span> <span class="kw">function</span> <span class="fn">tick</span>(dt: <span class="kw">number</span>) {</span><span>  stats.<span class="fn">drift</span>(dt)                 <span class="cm">// hunger, energy, mood</span></span><span>  movement.<span class="fn">update</span>(dt)             <span class="cm">// momentum, skid, landing</span></span><span>  <span class="kw">if</span> (activity.done) {</span><span>    <span class="kw">const</span> roll = rng.<span class="fn">next</span>()</span><span>    next = roll &lt; <span class="nu">0.05</span> ? events.<span class="fn">roll</span>() : behavior.<span class="fn">pick</span>(ctx)</span><span>  }</span><span>  attention.<span class="fn">noticeCursor</span>(cursor, dt) <span class="cm">// ears, then eyes, then head</span></span><span>  <span class="kw">if</span> (session.minutes &gt; <span class="nu">90</span>) <span class="fn">say</span>(<span class="st">'Take a break with me? 🐾'</span>)</span><span>}</span></div>
+        </div>
+        <div class="win notes">
+          <div class="tb"><span class="dots" aria-hidden="true"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></span><span class="title">Launch checklist</span><span class="ctl" aria-hidden="true">— ☐ ✕</span></div>
+          <ul aria-hidden="true">
+            <li class="done"><i>✓</i>Tail wag at 8 Hz, not 60</li>
+            <li class="done"><i>✓</i>Fetch and tug of war</li>
+            <li class="done"><i>✓</i>Mac menu bar build</li>
+            <li><i></i>Post on X</li>
+            <li><i></i>Ask friends to break it</li>
+          </ul>
+        </div>
+        <div class="taskbar" aria-hidden="true">
+          <span class="start"><i></i><i></i><i></i><i></i></span>
+          <span class="search">🔍 Search</span>
+          <span class="app on"><span class="ic-blue" style="width:60%;height:60%;border-radius:20%"></span></span>
+          <span class="app"><span class="ic-green" style="width:60%;height:60%;border-radius:20%"></span></span>
+          <span class="app"><span class="ic-pink" style="width:60%;height:60%;border-radius:20%"></span></span>
+          <span class="app on"><span class="ic-orange" style="width:60%;height:60%;border-radius:20%"></span></span>
+          <span class="tray"><span class="pawmark">🐾</span><span>9:41 AM</span></span>
+        </div>
+        <div class="dock" aria-hidden="true">
+          <span class="app ic-blue"></span><span class="app ic-green"></span><span class="app ic-pink"></span><span class="app ic-yellow"></span><span class="sep"></span><span class="app ic-grey"></span>
+        </div>
+        <div class="pet" id="pet">
+          <div class="hit" id="pet-hit"></div>
+          <div class="body" id="pet-body">
+            <img data-f="walk" src="img/pose-walk.png" alt="" draggable="false">
+            <img data-f="run" src="img/pose-run.png" alt="" draggable="false">
+            <img data-f="idle" src="img/pose-idle.png" alt="Max the golden retriever" draggable="false" class="on">
+            <img data-f="sit" src="img/pose-sit.png" alt="" draggable="false">
+            <img data-f="sleep" src="img/pose-sleep.png" alt="" draggable="false">
+            <img data-f="perk" src="img/motion-notice-ear.png" alt="" draggable="false">
+            <img data-f="look" src="img/motion-notice-look.png" alt="" draggable="false">
+            <img data-f="happy" src="img/pose-happy.png" alt="" draggable="false">
+            <img data-f="curious" src="img/pose-curious.png" alt="" draggable="false">
+          </div>
+          <div class="bubble" id="pet-bubble" aria-live="polite"></div>
+        </div>
+      </div>
+      <p class="demo-caption">The real app does more than this page can: Max accelerates and brakes with momentum, leans into turns, swings when you carry him, and turns his head to follow your cursor at 8 to 30 ticks per second. The frames here are the app's own renders, captured on Windows.</p>
+    </div>
+  </div>
+</section>
+
+<section id="life">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow">While you work</div>
+      <h2>He decides for himself. You just happen to be there.</h2>
+      <p class="lede">Nothing in PetOnScreen "plays an animation" on a timer. A behavior engine picks what Max does next from 28 states, weighted by his personality, his stats, the time of day, and what you have been doing.</p>
+    </div>
+    <div class="strip" aria-label="Some of Max's states">
+      <figure><img src="img/pose-idle.png" alt="Max standing"><figcaption>Idle</figcaption></figure>
+      <figure><img src="img/pose-walk.png" alt="Max walking"><figcaption>Walk</figcaption></figure>
+      <figure><img src="img/pose-run.png" alt="Max running"><figcaption>Run</figcaption></figure>
+      <figure><img src="img/pose-sit.png" alt="Max sitting"><figcaption>Sit</figcaption></figure>
+      <figure><img src="img/pose-sleep.png" alt="Max asleep"><figcaption>Sleep</figcaption></figure>
+      <figure><img src="img/pose-eat.png" alt="Max eating from a bowl"><figcaption>Eat</figcaption></figure>
+      <figure><img src="img/pose-happy.png" alt="Max happy with tongue out"><figcaption>Happy</figcaption></figure>
+      <figure><img src="img/pose-curious.png" alt="Max curious"><figcaption>Curious</figcaption></figure>
+      <figure><img src="img/pose-scared.png" alt="Max startled"><figcaption>Scared</figcaption></figure>
+      <figure><img src="img/pose-sad.png" alt="Max lying down sad"><figcaption>Sad</figcaption></figure>
+      <figure><img src="img/pose-angry.png" alt="Max annoyed"><figcaption>Annoyed</figcaption></figure>
+      <figure><img src="img/pose-tug.png" alt="Max pulling a rope"><figcaption>Tug</figcaption></figure>
+    </div>
+    <p class="strip-note">Also: look around, stretch, groom, jump, drink, bathe, hide, dance, zoomies, celebrate, watch you, and a few more. Cats groom and nap more, penguins bathe, foxes hide things.</p>
+
+    <div class="tiles" style="margin-top:28px">
+      <div class="tile">
+        <div class="art">
+          <figure><img src="img/motion-notice-ear.png" alt="Max with ears perked"><figcaption>ears first</figcaption></figure>
+          <span class="arrow">→</span>
+          <figure><img src="img/motion-notice-look.png" alt="Max looking toward the cursor"><figcaption>then eyes, then head</figcaption></figure>
+        </div>
+        <h3>He notices you</h3>
+        <p>Move your mouse near him and his ears perk up first, after a delay that depends on how curious he is. Then his eyes follow, then his head turns. Keep working and he loses interest.</p>
+      </div>
+      <div class="tile">
+        <div class="art">
+          <figure><img src="img/motion-carried.png" alt="Max swinging while carried"><figcaption>carried</figcaption></figure>
+          <figure><img src="img/motion-falling.png" alt="Max falling"><figcaption>falling</figcaption></figure>
+          <figure><img src="img/motion-landed.png" alt="Max landed and startled"><figcaption>landed</figcaption></figure>
+        </div>
+        <h3>Pick him up</h3>
+        <p>Drag him anywhere. He swings from your hand, pivots when you move fast, drops with gravity when you let go, lands with a squash, and is briefly offended if it was a long fall.</p>
+      </div>
+      <div class="tile">
+        <div class="art">
+          <img src="img/pet-event.png" alt="Max with a thinking bubble">
+          <span class="fact">~5% chance after each activity</span>
+        </div>
+        <h3>Rare moments</h3>
+        <p>Fourteen spontaneous events: zoomies, a dance, hiding behind nothing, a sudden gift, or a treasure he found that goes into your inventory. They are rare on purpose, so you notice them.</p>
+      </div>
+      <div class="tile">
+        <div class="art">
+          <img src="img/pet-petted.png" alt="Max being petted with hearts">
+          <span class="fact">8 traits, drift with treatment</span>
+        </div>
+        <h3>A personality that shifts</h3>
+        <p>Playfulness, laziness, curiosity, friendliness, energy, intelligence, affection and mischief bias every decision. Play a lot and he gets more playful. Ignore him and he gets more independent.</p>
+      </div>
+      <div class="tile">
+        <div class="art">
+          <span class="fact" style="font-size:0.95rem;padding:14px 18px">Take a break with me? 🐾</span>
+        </div>
+        <h3>Knows when you have been at it too long</h3>
+        <p>After 90 minutes of continuous use he asks you to take a break. He also notices when you walk away and greets you when you come back. The only signal is the OS idle timer.</p>
+      </div>
+      <div class="tile">
+        <div class="art">
+          <span class="fact" style="font-size:0.95rem;padding:14px 18px">"not tired at all! woof"</span>
+        </div>
+        <h3>Talks back</h3>
+        <p>Open the talk bubble and ask how he is. Replies are local, instant and aware of his stats, with no key or account. Add a Claude API key in Settings and he answers in character and remembers your name.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="games">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow">Mini-games</div>
+      <h2>Two games you play with your actual mouse.</h2>
+      <p class="lede">Both run on the same overlay. Press Esc or Done to stop and give the screen back.</p>
+    </div>
+    <div class="games">
+      <div class="game">
+        <div class="shot"><img src="img/play-fetch-throw.png" alt="Max saying throw it throw it while a ball flies across the screen"></div>
+        <div class="txt">
+          <span class="hud">🎾 Fetch <b>Done</b></span>
+          <h3>Fetch</h3>
+          <p>Pick up the ball and flick it anywhere on screen. Max reacts with a delay that depends on his personality, chases, leaps for balls thrown high, catches, and carries it back to your cursor. Lazy pets sometimes refuse. Mischievous ones run off with it.</p>
+        </div>
+      </div>
+      <div class="game">
+        <div class="shot"><img src="img/play-tug.png" alt="Max gripping a rope and growling"></div>
+        <div class="txt">
+          <span class="hud">🪢 Tug of war <b>Done</b></span>
+          <h3>Tug of war</h3>
+          <p>Hold the rope end and pull. He tugs back in bursts and skids when you yank. Both grips drain until someone wins the round. A small HUD shows score and grip meters.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="characters">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow">24 characters</div>
+      <h2>Max is the default. He is not the only one.</h2>
+      <p class="lede">Twenty-three animals, including eight dog breeds, and one tiny person. Each has its own silhouette, gait, voice, favorite foods and behavior biases. Adopt as many as you like. One is on screen at a time, the others keep their stats and memories.</p>
+    </div>
+    <div class="species">
+      <div class="sp"><div class="frame"><img src="img/species-dog.png" alt="Golden Retriever"></div><b>Dog</b><small>Golden Retriever · brings you things</small></div>
+      <div class="sp"><div class="frame"><img src="img/species-husky.png" alt="Husky"></div><b>Husky</b><small>Siberian Husky · never tired</small></div>
+      <div class="sp"><div class="frame"><img src="img/species-corgi.png" alt="Corgi"></div><b>Corgi</b><small>Pembroke Welsh · sploots, wiggles</small></div>
+      <div class="sp"><div class="frame"><img src="img/species-dalmatian.png" alt="Dalmatian"></div><b>Dalmatian</b><small>built to run, grins the whole time</small></div>
+      <div class="sp"><div class="frame"><img src="img/species-pug.png" alt="Pug"></div><b>Pug</b><small>snorty · sits on your feet</small></div>
+      <div class="sp"><div class="frame"><img src="img/species-dachshund.png" alt="Dachshund"></div><b>Dachshund</b><small>Miniature · digs and burrows</small></div>
+      <div class="sp"><div class="frame"><img src="img/species-shiba.png" alt="Shiba Inu"></div><b>Shiba Inu</b><small>affection on its terms</small></div>
+      <div class="sp"><div class="frame"><img src="img/species-collie.png" alt="Border Collie"></div><b>Border Collie</b><small>herds your cursor</small></div>
+      <div class="sp"><div class="frame"><img src="img/species-cat.png" alt="Grey tabby cat"></div><b>Cat</b><small>Grey Tabby · ignores you on purpose</small></div>
+      <div class="sp"><div class="frame"><img src="img/species-rabbit.png" alt="Rabbit"></div><b>Rabbit</b><small>Holland Lop · startles easily</small></div>
+      <div class="sp"><div class="frame"><img src="img/species-fox.png" alt="Fox"></div><b>Fox</b><small>Red Fox · hides things</small></div>
+      <div class="sp"><div class="frame"><img src="img/species-wolf.png" alt="Wolf"></div><b>Wolf</b><small>Grey Wolf · patrols, howls</small></div>
+      <div class="sp"><div class="frame"><img src="img/species-lion.png" alt="Lion"></div><b>Lion</b><small>sleeps most of the day</small></div>
+      <div class="sp"><div class="frame"><img src="img/species-panda.png" alt="Panda"></div><b>Panda</b><small>Giant Panda · falls over sometimes</small></div>
+      <div class="sp"><div class="frame"><img src="img/species-redpanda.png" alt="Red Panda"></div><b>Red Panda</b><small>naps in the sun</small></div>
+      <div class="sp"><div class="frame"><img src="img/species-deer.png" alt="Deer"></div><b>Deer</b><small>Spotted Fawn · watchful</small></div>
+      <div class="sp"><div class="frame"><img src="img/species-owl.png" alt="Owl"></div><b>Owl</b><small>Tawny Owl · livelier at night</small></div>
+      <div class="sp"><div class="frame"><img src="img/species-swan.png" alt="Swan"></div><b>Swan</b><small>Mute Swan · does not do zoomies</small></div>
+      <div class="sp"><div class="frame"><img src="img/species-duck.png" alt="Duck"></div><b>Duck</b><small>Yellow Duckling · quacks at nothing</small></div>
+      <div class="sp"><div class="frame"><img src="img/species-penguin.png" alt="Penguin"></div><b>Penguin</b><small>Emperor · slides, bathes</small></div>
+      <div class="sp"><div class="frame"><img src="img/species-unicorn.png" alt="Unicorn"></div><b>Unicorn</b><small>Pastel · prances, shows off</small></div>
+      <div class="sp"><div class="frame"><img src="img/species-dragon.png" alt="Dragon"></div><b>Dragon</b><small>Pocket Dragon · hoards shiny things</small></div>
+      <div class="sp"><div class="frame"><img src="img/species-hamster.png" alt="Hamster"></div><b>Hamster</b><small>Golden Hamster · stuffs its cheeks</small></div>
+      <div class="sp human"><div class="frame"><img src="img/species-person.png" alt="A tiny person called Companion"></div><b>Companion</b><small>Desk Buddy · sips coffee, reads, reminds you to take breaks</small></div>
+    </div>
+  </div>
+</section>
+
+<section id="memory">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow">Memory and progress</div>
+      <h2>He remembers you between sessions.</h2>
+      <p class="lede">Relationship level, favorite activity and food, who you are, how many times you petted him, every rare event. Stats drift gently while the app is closed and he catches up when you return. XP and levels come from time together.</p>
+    </div>
+    <div class="shots">
+      <div class="shot-card"><div class="img"><img src="img/dashboard-pets.png" alt="My Pets screen showing Max, his stats and Pet, Feed, Play buttons"></div><p><b>Dashboard.</b> Stats, Pet, Feed, Play, rename, switch pets. Opened from the tray or menu bar paw, or by right-clicking him.</p></div>
+      <div class="shot-card"><div class="img"><img src="img/dashboard-memory.png" alt="What Max remembers screen with relationship, interaction counts and personality bars"></div><p><b>What Max remembers.</b> Relationship, counts, favorites, event log, and the personality bars that move as you treat him.</p></div>
+      <div class="shot-card"><div class="img"><img src="img/dashboard-adopt.png" alt="Adopt screen with cards for a dog, a cat, a rabbit and a fox"></div><p><b>Adopt.</b> Every character is free in this release. Personalities are randomized a little, so no two pets are the same.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="quiet">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow">Built to stay out of the way</div>
+      <h2>Always on top. Never in the way. Barely on the CPU.</h2>
+    </div>
+    <div class="cols">
+      <div>
+        <h3>How the overlay works</h3>
+        <p>One transparent, frameless window covers your work area and stays above everything else. It starts in click-through mode, so every click lands on whatever is underneath. The main process polls the cursor position at 20 Hz; only while the cursor is over Max, or a menu is open, or you are dragging him, does the window take the mouse.</p>
+        <ul>
+          <li><b>Windows:</b> paw icon in the system tray with size, monitor, pause, click-through and always-on-top controls. Optional start with Windows.</li>
+          <li><b>macOS:</b> a menu bar agent with no Dock icon and no Cmd-Tab entry. The pet floats above normal windows but below the menu bar, Spotlight and notifications, shows on every Space and over full-screen apps.</li>
+          <li><b>Multi-monitor:</b> pick which display he lives on. Walking between monitors is not built yet.</li>
+        </ul>
+        <h3 style="margin-top:12px">Privacy</h3>
+        <p>The only activity signal is the operating system's "seconds since last input" counter. No screenshots, keystrokes, window titles or contents are read. Everything lives in one local JSON file. The optional Claude API key is stored in that same file and is only used from the app when you chat.</p>
+      </div>
+      <div>
+        <h3>Measured CPU, all pet processes combined</h3>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>Situation</th><th>Share of one core</th></tr></thead>
+            <tbody>
+              <tr><td>Max idle: breathing, tail, blinking</td><td class="num">~7%</td></tr>
+              <tr><td>Walking or playing</td><td class="num">10 to 20%</td></tr>
+              <tr><td>Static overlay, no loop (the floor)</td><td class="num">~0%</td></tr>
+              <tr><td>Same app before the optimisation pass</td><td class="num">~50% idle</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="small muted">12-core laptop, Intel Iris Xe, 1920×1200 at 150% scaling. Your numbers will differ; that is one of the things to report below.</p>
+        <div class="note"><b>Why it is cheap.</b> No 60 Hz loop while idle: the runtime ticks at about 8 Hz when Max is still, 30 Hz when he moves, and only uses animation frames while he is airborne or dragged. Every moving part is its own composited layer, and the always-on motion is written as inline transforms instead of CSS keyframes.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow">Install</div>
+      <h2 id="download">Get Max on your machine in about a minute.</h2>
+      <p class="lede">This is an early build from one developer. It is not code-signed yet, so both operating systems will warn you once. The steps below get you past that.</p>
+    </div>
+    <div class="dl-grid" style="margin-bottom:28px">
+      <div class="dl">
+        <div class="os"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 5.5 10.5 4.4v7.1H3zM11.6 4.2 21 3v8.5h-9.4zM3 12.5h7.5v7.1L3 18.5zM11.6 12.5H21V21l-9.4-1.3z"/></svg>Windows 10 / 11</div>
+        <div class="file">PetOnScreen-Setup-0.1.0.exe · 64-bit installer</div>
+        <a class="btn btn-primary" href="https://github.com/TapanChitransh/Proj/releases/latest/download/PetOnScreen-Setup-0.1.0.exe">Download for Windows</a>
+      </div>
+      <div class="dl">
+        <div class="os"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16.4 12.6c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.8-1.4-.1-2.8.9-3.5.9-.7 0-1.8-.8-3-.8-1.5 0-3 .9-3.8 2.3-1.6 2.8-.4 7 1.2 9.3.8 1.1 1.7 2.4 2.9 2.3 1.2 0 1.6-.8 3-.8s1.8.8 3 .7c1.3 0 2-1.1 2.8-2.3.9-1.3 1.2-2.6 1.3-2.6-.1 0-2.5-.9-2.5-3.7zM14.1 5.8c.6-.8 1.1-1.9 1-3-.9 0-2.1.6-2.7 1.4-.6.7-1.1 1.8-1 2.9 1 .1 2.1-.5 2.7-1.3z"/></svg>Mac, Apple Silicon</div>
+        <div class="file">PetOnScreen-0.1.0-arm64.dmg · M1, M2, M3, M4</div>
+        <a class="btn btn-primary" href="https://github.com/TapanChitransh/Proj/releases/latest/download/PetOnScreen-0.1.0-arm64.dmg">Download for Apple Silicon</a>
+      </div>
+      <div class="dl">
+        <div class="os"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16.4 12.6c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.8-1.4-.1-2.8.9-3.5.9-.7 0-1.8-.8-3-.8-1.5 0-3 .9-3.8 2.3-1.6 2.8-.4 7 1.2 9.3.8 1.1 1.7 2.4 2.9 2.3 1.2 0 1.6-.8 3-.8s1.8.8 3 .7c1.3 0 2-1.1 2.8-2.3.9-1.3 1.2-2.6 1.3-2.6-.1 0-2.5-.9-2.5-3.7zM14.1 5.8c.6-.8 1.1-1.9 1-3-.9 0-2.1.6-2.7 1.4-.6.7-1.1 1.8-1 2.9 1 .1 2.1-.5 2.7-1.3z"/></svg>Mac, Intel</div>
+        <div class="file">PetOnScreen-0.1.0-x64.dmg · Intel Macs</div>
+        <a class="btn btn-primary" href="https://github.com/TapanChitransh/Proj/releases/latest/download/PetOnScreen-0.1.0-x64.dmg">Download for Intel Mac</a>
+      </div>
+    </div>
+    <p class="small muted" style="margin-bottom:24px">All files, checksums and older versions: <a href="https://github.com/TapanChitransh/Proj/releases">github.com/TapanChitransh/Proj/releases</a>. Not sure which Mac you have? Apple menu → About This Mac → look at "Chip".</p>
+
+    <div class="install">
+      <div class="inst">
+        <h3><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 5.5 10.5 4.4v7.1H3zM11.6 4.2 21 3v8.5h-9.4zM3 12.5h7.5v7.1L3 18.5zM11.6 12.5H21V21l-9.4-1.3z"/></svg>On Windows</h3>
+        <ol>
+          <li>Run <b>PetOnScreen-Setup-0.1.0.exe</b>.</li>
+          <li>SmartScreen will say "Windows protected your PC". Click <b>More info</b>, then <b>Run anyway</b>. This happens because the build is not signed with a paid certificate, not because anything was flagged.</li>
+          <li>Max appears at the bottom of your main display. Right-click him for the menu. The <b>paw icon in the tray</b> has size, monitor, pause and the dashboard.</li>
+        </ol>
+        <div class="warn">If Max is invisible but the tray paw is there, open the tray menu and check which monitor he is on, or press Show.</div>
+        <div class="req"><span>Windows 10 or 11</span><span>64-bit</span><span>No admin rights needed</span></div>
+      </div>
+      <div class="inst">
+        <h3><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16.4 12.6c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.8-1.4-.1-2.8.9-3.5.9-.7 0-1.8-.8-3-.8-1.5 0-3 .9-3.8 2.3-1.6 2.8-.4 7 1.2 9.3.8 1.1 1.7 2.4 2.9 2.3 1.2 0 1.6-.8 3-.8s1.8.8 3 .7c1.3 0 2-1.1 2.8-2.3.9-1.3 1.2-2.6 1.3-2.6-.1 0-2.5-.9-2.5-3.7zM14.1 5.8c.6-.8 1.1-1.9 1-3-.9 0-2.1.6-2.7 1.4-.6.7-1.1 1.8-1 2.9 1 .1 2.1-.5 2.7-1.3z"/></svg>On a Mac</h3>
+        <ol>
+          <li>Open the <b>.dmg</b> and drag PetOnScreen into <b>Applications</b>.</li>
+          <li>First launch: <b>right-click the app → Open</b>, then Open again in the dialog. A plain double-click may be refused because the build is not notarized yet.</li>
+          <li>If macOS says the app "is damaged and can't be opened", run this once in Terminal, then open it again:
+            <pre><code>xattr -dr com.apple.quarantine /Applications/PetOnScreen.app</code></pre>
+          </li>
+          <li>There is no Dock icon on purpose. Look for the <b>paw in the menu bar</b>. Max shows up at the bottom of your main display, on every Space.</li>
+        </ol>
+        <div class="req"><span>macOS 11 Big Sur or later</span><span>Apple Silicon or Intel</span><span>Menu bar app</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="test">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow">Help test it</div>
+      <h2>I built this on one Windows laptop. I need your machine.</h2>
+      <p class="lede">The Mac build has only run on a CI server, and Windows has only been tested on one display setup. If you try it, these are the things I most want to hear about, good or bad.</p>
+    </div>
+    <div class="checks">
+      <div class="chk"><i></i><span><b>Did you get past the warning?</b> SmartScreen on Windows, Gatekeeper on Mac. Which exact message did you see?</span></div>
+      <div class="chk"><i></i><span><b>Is he on top?</b> Does Max stay above your windows, and on Mac, below the menu bar and notifications?</span></div>
+      <div class="chk"><i></i><span><b>Does click-through work?</b> Can you click a button that is right next to him, and type into a window behind him?</span></div>
+      <div class="chk"><i></i><span><b>CPU while idle.</b> Task Manager or Activity Monitor after he has been standing still for a minute. What does it say?</span></div>
+      <div class="chk"><i></i><span><b>Multiple monitors.</b> Different scaling, a vertical monitor, a monitor to the left. Where does he end up?</span></div>
+      <div class="chk"><i></i><span><b>Fetch and tug.</b> Did the ball land where you flicked it? Did the rope follow your cursor?</span></div>
+      <div class="chk"><i></i><span><b>Full-screen apps on Mac.</b> Is he still there over a full-screen video or editor?</span></div>
+      <div class="chk"><i></i><span><b>Anything that made you smile.</b> Which rare event did you catch first?</span></div>
+    </div>
+    <div class="share">
+      <h3>Tell me what happened</h3>
+      <p class="muted">Reply to the launch post on X with your OS and a screenshot, or open an issue. The text below is a starting point; edit it and copy.</p>
+      <textarea id="share-text" aria-label="Draft post">Trying PetOnScreen, a desktop pet that lives on top of your screen while you work. Windows + Mac, free: </textarea>
+      <div class="row">
+        <button class="btn btn-primary btn-sm" type="button" id="copy-btn">Copy text</button>
+        <a class="btn btn-ghost btn-sm" id="x-btn" href="https://twitter.com/intent/tweet" target="_blank" rel="noopener">Post on X</a>
+        <a class="btn btn-ghost btn-sm" href="https://github.com/TapanChitransh/Proj/issues/new" target="_blank" rel="noopener">Open a GitHub issue</a>
+        <span class="toast" id="toast" aria-live="polite"></span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="roadmap">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow">Straight answer</div>
+      <h2>What is real today, and what is not.</h2>
+      <p class="lede">Nothing in the app is a placeholder button. If it is not in the left column, it is not in the UI.</p>
+    </div>
+    <div class="road">
+      <div>
+        <h3 class="ok">Built and working</h3>
+        <ul>
+          <li>Transparent always-on-top overlay with click-through, drag, gravity and a remembered position</li>
+          <li>Behavior engine with 28 states, 8 personality traits, stats with offline catch-up</li>
+          <li>24 characters across three body types, multiple owned pets, inventory, XP and levels</li>
+          <li>Fetch and tug of war</li>
+          <li>Talk bubble with local replies, optional Claude replies, memory of you</li>
+          <li>Synthesized sounds with a master toggle, tray and menu bar controls, start with system</li>
+        </ul>
+      </div>
+      <div>
+        <h3 class="plan">Planned, not built</h3>
+        <ul>
+          <li>Marketplace: currency, rare and limited pets, accessories, skins, environments</li>
+          <li>Hand-drawn artwork to replace the procedural sprites you see here</li>
+          <li>Recorded animal sounds</li>
+          <li>OS notifications and an onboarding tour</li>
+          <li>Walking between monitors</li>
+          <li>Code signing and notarization, so the install warnings go away</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>PetOnScreen v0.1.0 · MIT license</span>
+    <a href="https://github.com/TapanChitransh/Proj/tree/main/PetOnScreen" target="_blank" rel="noopener">Source on GitHub</a>
+    <a href="https://github.com/TapanChitransh/Proj/releases" target="_blank" rel="noopener">Releases</a>
+    <span>Electron 33 · React 18 · TypeScript · engine unit-tested with vitest</span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  'use strict';
+  var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var desk = document.getElementById('desk');
+  var pet = document.getElementById('pet');
+  var body = document.getElementById('pet-body');
+  var hit = document.getElementById('pet-hit');
+  var bubble = document.getElementById('pet-bubble');
+  var imgs = {};
+  Array.prototype.forEach.call(body.querySelectorAll('img'), function (im) {
+    imgs[im.dataset.f] = im;
+    var dims = { walk: [159, 127], run: [155, 133], idle: [159, 126], sit: [153, 127], sleep: [164, 118], perk: [145, 127], look: [154, 127], happy: [159, 135], curious: [159, 128] }[im.dataset.f];
+    im.style.width = 'calc(' + dims[0] + ' * var(--k))';
+  });
+
+  /* OS toggle */
+  var bw = document.getElementById('os-win'), bm = document.getElementById('os-mac');
+  function setOS(os) {
+    desk.dataset.os = os;
+    bw.setAttribute('aria-pressed', os === 'win');
+    bm.setAttribute('aria-pressed', os === 'mac');
+    try { localStorage.setItem('pos-os', os); } catch (e) {}
+  }
+  bw.addEventListener('click', function () { setOS('win'); });
+  bm.addEventListener('click', function () { setOS('mac'); });
+  try {
+    var saved = localStorage.getItem('pos-os');
+    if (saved === 'mac' || saved === 'win') setOS(saved);
+    else if (/Mac|iPhone|iPad/.test(navigator.platform)) setOS('mac');
+  } catch (e) {}
+
+  /* pet state */
+  var W = function () { return desk.clientWidth; };
+  var s = { state: 'idle', frame: 'idle', x: 0.32, face: 1, until: 0, target: null, speed: 0, mode: 'walk', bobT: 0, noticed: false, noticeAt: 0, interestUntil: 0, hover: false, lastBubble: 0 };
+  var cursor = { x: -1, y: -1, t: 0, inside: false };
+  var now = function () { return performance.now() / 1000; };
+  var rand = function (a, b) { return a + Math.random() * (b - a); };
+  var pick = function (arr) { return arr[Math.floor(Math.random() * arr.length)]; };
+
+  function frame(f) {
+    if (s.frame === f) return;
+    if (imgs[s.frame]) imgs[s.frame].classList.remove('on');
+    s.frame = f;
+    imgs[f].classList.add('on');
+  }
+  var bubbleTimer = null;
+  function say(text, ms) {
+    bubble.textContent = text;
+    bubble.classList.add('show');
+    clearTimeout(bubbleTimer);
+    bubbleTimer = setTimeout(function () { bubble.classList.remove('show'); }, ms || 2200);
+  }
+  function fx(text, cls) {
+    if (reduce) return;
+    var el = document.createElement('span');
+    el.className = 'fx ' + (cls || '');
+    el.textContent = text;
+    el.style.setProperty('--dx', rand(-30, 30).toFixed(0) + 'px');
+    el.style.marginLeft = rand(-14, 14).toFixed(0) + 'px';
+    pet.appendChild(el);
+    setTimeout(function () { el.remove(); }, 1400);
+  }
+
+  function set(state, dur) { s.state = state; s.until = now() + dur; s.target = null; }
+  function goTo(x, mode) {
+    s.state = 'move'; s.mode = mode; s.target = x; s.until = now() + 20;
+    s.face = x > s.x ? 1 : -1;
+    s.speed = mode === 'run' ? 0.34 : 0.085;
+  }
+  function choose() {
+    var r = Math.random();
+    if (r < 0.42) goTo(rand(0.08, 0.92), 'walk');
+    else if (r < 0.5) { goTo(s.x < 0.5 ? rand(0.7, 0.92) : rand(0.08, 0.3), 'run'); say(pick(['ZOOM', '*zoomies*', 'wheeee']), 1400); }
+    else if (r < 0.68) set('idle', rand(1.5, 3.5));
+    else if (r < 0.86) set('sit', rand(3, 6));
+    else { set('sleep', rand(6, 10)); say(pick(['*yawn*', 'five more minutes...', 'nap time soon woof']), 1800); }
+  }
+
+  var zTimer = 0, lastT = now(), running = true, visible = true;
+  function tick() {
+    if (!running) return;
+    var t = now(), dt = Math.min(0.1, t - lastT); lastT = t;
+    var w = W();
+    var px = s.x * w;
+    var cy = pet.offsetTop - hit.offsetHeight * 0.5;
+    var near = cursor.inside && Math.hypot(cursor.x - px, cursor.y - cy) < w * 0.22;
+    var stale = t - cursor.t > 6;
+
+    /* attention model: ears, then eyes/head; interest fades */
+    if (near && !stale && s.state !== 'sleep' && s.state !== 'move' && !s.hover) {
+      if (!s.noticed) { s.noticed = true; s.noticeAt = t + rand(0.1, 0.6); s.interestUntil = t + rand(4, 7); }
+      if (t > s.noticeAt && t < s.interestUntil) {
+        s.face = cursor.x > px ? 1 : -1;
+        frame(t < s.noticeAt + 0.4 ? 'perk' : 'look');
+        s.until = Math.max(s.until, t + 0.6);
+      } else if (t >= s.interestUntil) {
+        frame(s.state === 'sit' ? 'sit' : 'idle');
+      }
+    } else {
+      s.noticed = false;
+      if (s.hover && s.state !== 'sleep') frame('happy');
+      else if (s.state === 'move') frame(s.mode === 'run' ? 'run' : 'walk');
+      else if (s.state === 'sleep') frame('sleep');
+      else if (s.state === 'sit') frame('sit');
+      else if (s.state === 'happy') frame('happy');
+      else frame('idle');
+    }
+
+    var bob = 0, rot = 0;
+    if (s.state === 'move' && !reduce) {
+      var dir = s.target > s.x ? 1 : -1;
+      var step = s.speed * dt;
+      var remaining = Math.abs(s.target - s.x);
+      var ease = Math.min(1, remaining / 0.08 + 0.25);
+      s.x += dir * Math.min(step * ease, remaining);
+      s.bobT += dt * (s.mode === 'run' ? 5.2 : 3.1);
+      var k = Math.abs(Math.sin(s.bobT * Math.PI));
+      bob = -k * (s.mode === 'run' ? 8 : 4) * (w / 1000);
+      rot = Math.sin(s.bobT * Math.PI * 2) * (s.mode === 'run' ? 2.5 : 1.5);
+      if (remaining < 0.002) { s.x = s.target; set('idle', rand(0.8, 2.5)); }
+    } else if (s.state === 'sleep') {
+      if (t > zTimer) { zTimer = t + 1.3; fx(pick(['z', 'z', 'Z']), 'z'); }
+      bob = Math.sin(t * 1.6) * 0.8 * (w / 1000);
+    } else if (!reduce) {
+      bob = Math.sin(t * 1.9) * 0.9 * (w / 1000);
+    }
+    if (t > s.until && s.state !== 'move' && !s.hover) choose();
+    if (reduce && s.state === 'move') set('idle', 2);
+
+    pet.style.transform = 'translateX(' + (s.x * w).toFixed(1) + 'px)';
+    body.style.transform = 'translateY(' + bob.toFixed(2) + 'px) rotate(' + rot.toFixed(2) + 'deg) scaleX(' + s.face + ')';
+    if (visible) setTimeout(function () { requestAnimationFrame(tick); }, reduce ? 250 : 16);
+  }
+
+  /* pointer */
+  desk.addEventListener('pointermove', function (e) {
+    var r = desk.getBoundingClientRect();
+    cursor.x = e.clientX - r.left; cursor.y = e.clientY - r.top; cursor.t = now(); cursor.inside = true;
+  });
+  desk.addEventListener('pointerleave', function () { cursor.inside = false; s.hover = false; });
+  hit.addEventListener('pointerenter', function () {
+    s.hover = true;
+    if (s.state === 'move') set('idle', 2);
+    if (s.state === 'sleep') { set('idle', 2); say('*yawn* ...hi', 1600); fx('♥'); return; }
+    if (now() - s.lastBubble > 4) { s.lastBubble = now(); say(pick(['hi! I\'m Max 🐾', 'hello!', '*wags*', 'pet me?']), 1800); }
+    s.face = cursor.inside && cursor.x < s.x * W() ? -1 : 1;
+  });
+  hit.addEventListener('pointerleave', function () { s.hover = false; if (s.state !== 'sleep') set('idle', rand(0.6, 1.5)); });
+  function poke(e) {
+    e.preventDefault();
+    s.hover = false;
+    set('happy', 1.6);
+    fx('♥'); setTimeout(function () { fx('♥'); }, 120); setTimeout(function () { fx('♥'); }, 260);
+    say(pick(['ball?! BALL!', 'throw it throw it', 'again?', 'that was a good one', '*bounces* wide awake!']), 1800);
+    s.lastBubble = now();
+    if (Math.random() < 0.35) setTimeout(function () { if (s.state === 'happy' || s.state === 'idle') { goTo(s.x < 0.5 ? rand(0.7, 0.92) : rand(0.08, 0.3), 'run'); } }, 900);
+  }
+  hit.addEventListener('pointerdown', poke);
+  hit.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') poke(e); });
+  hit.setAttribute('tabindex', '0');
+  hit.setAttribute('role', 'button');
+  hit.setAttribute('aria-label', 'Max. Press to play with him.');
+
+  /* pause when offscreen or hidden */
+  if ('IntersectionObserver' in window) {
+    new IntersectionObserver(function (en) {
+      var v = en[0].isIntersecting;
+      if (v && !visible) { visible = true; lastT = now(); requestAnimationFrame(tick); }
+      else if (!v) visible = false;
+    }, { threshold: 0.05 }).observe(desk);
+  }
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) { running = false; }
+    else { running = true; lastT = now(); requestAnimationFrame(tick); }
+  });
+  set('idle', 1.2);
+  requestAnimationFrame(tick);
+  setTimeout(function () { say('hi! I\'m Max 🐾', 2400); }, 900);
+
+  /* share */
+  var ta = document.getElementById('share-text');
+  var xb = document.getElementById('x-btn');
+  var pageUrl = location.href.split('#')[0];
+  if (ta.value.slice(-1) === ' ') ta.value += pageUrl;
+  function syncX() { xb.href = 'https://twitter.com/intent/tweet?text=' + encodeURIComponent(ta.value); }
+  ta.addEventListener('input', syncX); syncX();
+  document.getElementById('copy-btn').addEventListener('click', function () {
+    var toast = document.getElementById('toast');
+    var done = function () { toast.textContent = 'Copied'; setTimeout(function () { toast.textContent = ''; }, 2000); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(ta.value).then(done, function () { ta.focus(); ta.select(); toast.textContent = 'Press Ctrl+C / Cmd+C'; });
+    } else { ta.focus(); ta.select(); toast.textContent = 'Press Ctrl+C / Cmd+C'; }
+  });
+})();
+</script>
+</body>
+</html>

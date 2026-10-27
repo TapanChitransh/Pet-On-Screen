@@ -1,0 +1,103 @@
+# Builds PetOnScreen for Windows and macOS and attaches the installers to a GitHub Release.
+#
+# Trigger: push a tag like v0.1.0 (creates/updates the release), or run manually from the
+# Actions tab (builds only; artifacts are downloadable from the run).
+#
+# Optional repository secrets for a signed, notarized macOS build
+# (Settings -> Secrets and variables -> Actions). Without them the DMGs are unsigned and
+# users must right-click -> Open the first time.
+#   CSC_LINK                    base64 of your "Developer ID Application" certificate exported as .p12
+#   CSC_KEY_PASSWORD            password you set when exporting the .p12
+#   APPLE_ID                    the Apple ID email of your developer account
+#   APPLE_APP_SPECIFIC_PASSWORD app-specific password generated at appleid.apple.com
+#   APPLE_TEAM_ID               10-character Team ID from developer.apple.com/account
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: PetOnScreen
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Windows installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: PetOnScreen/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Package (NSIS installer)
+        run: npx electron-builder --win --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PetOnScreen-windows
+          path: |
+            PetOnScreen/dist/*.exe
+            PetOnScreen/dist/*.blockmap
+            PetOnScreen/dist/latest.yml
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            PetOnScreen/dist/*.exe
+            PetOnScreen/dist/*.blockmap
+            PetOnScreen/dist/latest.yml
+
+  mac:
+    name: macOS DMGs
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: PetOnScreen/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Package (arm64 + x64 DMG and zip)
+        run: npx electron-builder --mac --publish never
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Without a certificate electron-builder still produces an unsigned, un-notarized build.
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.CSC_LINK != '' }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PetOnScreen-mac
+          path: |
+            PetOnScreen/dist/*.dmg
+            PetOnScreen/dist/*.zip
+            PetOnScreen/dist/*.blockmap
+            PetOnScreen/dist/latest-mac.yml
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            PetOnScreen/dist/*.dmg
+            PetOnScreen/dist/*.zip
+            PetOnScreen/dist/*.blockmap
+            PetOnScreen/dist/latest-mac.yml
