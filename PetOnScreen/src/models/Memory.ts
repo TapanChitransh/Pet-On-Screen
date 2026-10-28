@@ -1,4 +1,4 @@
-export type InteractionType = 'pet' | 'feed' | 'play' | 'toy' | 'talk' | 'click' | 'drag'
+export type InteractionType = 'pet' | 'feed' | 'play' | 'toy' | 'talk' | 'click' | 'drag' | 'command'
 
 export interface MemoryEvent {
   at: number
@@ -27,7 +27,7 @@ export const MAX_EVENTS = 60
 
 export function createMemory(): PetMemory {
   return {
-    interactionCounts: { pet: 0, feed: 0, play: 0, toy: 0, talk: 0, click: 0, drag: 0 },
+    interactionCounts: { pet: 0, feed: 0, play: 0, toy: 0, talk: 0, click: 0, drag: 0, command: 0 },
     foodCounts: {},
     totalInteractions: 0,
     lastInteractionAt: null,

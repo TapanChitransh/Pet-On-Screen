@@ -6,6 +6,7 @@ import { InventoryPanel } from './InventoryPanel'
 import { MemoryPanel } from './MemoryPanel'
 import { SettingsPanel } from '../Settings/SettingsPanel'
 import { RoadmapPanel } from './RoadmapPanel'
+import { UpdateCard } from './UpdateCard'
 
 export type Tab = 'pets' | 'adopt' | 'inventory' | 'memory' | 'settings' | 'about'
 
@@ -83,6 +84,7 @@ export function DashboardApp(): JSX.Element {
         </div>
       </aside>
       <main className="content">
+        <UpdateCard settings={state.settings} variant="banner" />
         {tab === 'pets' && (
           <section>
             <h1>My Pets</h1>

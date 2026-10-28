@@ -10,10 +10,11 @@ import { StatsPopover } from '../PetStats/StatsPopover'
 import { ChatBubble } from '../Chat/ChatBubble'
 import { InventoryPopover } from './InventoryPopover'
 import { RenamePopover } from './RenamePopover'
+import { TrainPopover } from './TrainPopover'
 import { PlayLayer } from '../Play/PlayLayer'
 import { PlayHud } from '../Play/PlayHud'
 
-export type OverlayKind = 'menu' | 'stats' | 'chat' | 'inventory' | 'rename'
+export type OverlayKind = 'menu' | 'stats' | 'chat' | 'inventory' | 'rename' | 'train'
 export interface Overlay {
   kind: OverlayKind
   x: number
@@ -214,6 +215,9 @@ export function PetStage({ runtime }: { runtime: PetRuntime }): JSX.Element {
               case 'talk':
                 openOverlay('chat')
                 break
+              case 'train':
+                openOverlay('train')
+                break
               case 'inventory':
                 openOverlay('inventory')
                 break
@@ -246,6 +250,7 @@ export function PetStage({ runtime }: { runtime: PetRuntime }): JSX.Element {
       {overlay?.kind === 'chat' && <ChatBubble x={overlay.x} y={overlay.y} runtime={runtime} onClose={() => setOverlay(null)} />}
       {overlay?.kind === 'inventory' && <InventoryPopover x={overlay.x} y={overlay.y} runtime={runtime} onClose={() => setOverlay(null)} />}
       {overlay?.kind === 'rename' && <RenamePopover x={overlay.x} y={overlay.y} runtime={runtime} onClose={() => setOverlay(null)} />}
+      {overlay?.kind === 'train' && <TrainPopover x={overlay.x} y={overlay.y} runtime={runtime} onClose={() => setOverlay(null)} />}
     </div>
   )
 }

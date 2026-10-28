@@ -33,6 +33,10 @@ export interface AppSettings {
   /** Optional Claude API key for AI conversation. Stored locally only. */
   aiApiKey: string
   aiModel: string
+  /** Listen on the microphone for voice commands (on-device recognition; audio never leaves the machine). */
+  voiceEnabled: boolean
+  /** Download new releases in the background and install them on quit. Checking happens either way. */
+  autoUpdate: boolean
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -49,7 +53,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   paused: false,
   ownerName: '',
   aiApiKey: '',
-  aiModel: 'claude-opus-5'
+  aiModel: 'claude-opus-5',
+  voiceEnabled: false,
+  autoUpdate: true
 }
 
 export interface SaveData {
@@ -133,6 +139,21 @@ export interface LiveSnapshot {
     level: number
     ageDays: number
   }
+}
+
+/** Auto-update progress, broadcast by the main process on the 'update:state' channel. */
+export interface UpdateState {
+  status: 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'downloaded' | 'error'
+  /** version of the running app */
+  current: string
+  /** newest release known, with its notes ("what's new") */
+  latest: { version: string; notes: string; url: string; pageUrl: string; publishedAt: number | null } | null
+  /** 0..1 while downloading */
+  progress: number
+  error: string | null
+  checkedAt: number | null
+  /** true when this build can download and install updates itself (installed Windows/Linux build) */
+  native: boolean
 }
 
 export interface ChatMessage {

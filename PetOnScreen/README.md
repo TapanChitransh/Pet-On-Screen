@@ -169,6 +169,23 @@ DMGs to a GitHub Release.
    unsigned build you can download from the run's artifacts for testing.
 3. Tag a release: `git tag v0.1.0 && git push --tags`. The DMGs appear on the Release page.
 
+### Auto-update
+
+Installed builds keep themselves current. On launch (after 20 s) and every six hours the app asks the
+GitHub Releases of `TapanChitransh/Pet-On-Screen` for a newer version (`src/main/updater.ts`, built on
+`electron-updater`). With "Update automatically" on (Settings, default) the Windows build downloads
+it in the background and installs it on the next quit, or right away from "Restart to update" in the
+dashboard banner or the tray. macOS builds are not code-signed yet, so Squirrel.Mac cannot swap them
+in place; they get a "Download from GitHub" button instead. Dev runs use the GitHub API fallback too.
+
+For this to work a release needs the update metadata next to the installers: electron-builder writes
+`dist/latest.yml` (Windows) and `dist/latest-mac.yml` (macOS) because `package.json` has a `publish`
+entry, and `release.yml` uploads them. The release body is shown in the dashboard as "What's new", so
+write the notable features into the GitHub release notes (the workflow pre-fills them from commits).
+
+Test the UI without publishing: `PETONSCREEN_UPDATE_FROM=0.0.9 npm start` pretends to run that
+version so the current GitHub release shows up as an update.
+
 ### What the Mac build includes
 
 - `LSUIElement` is set, so the app is a menu bar agent with no Dock icon and no Cmd-Tab entry.

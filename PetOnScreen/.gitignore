@@ -3,3 +3,5 @@ out
 dist
 .install.log
 *.log
+# onnxruntime wasm copied from node_modules by scripts/sync-ort.mjs
+src/renderer/public/ort

@@ -1,6 +1,6 @@
 import { Popover } from '../Pet/Popover'
 
-export type MenuAction = 'roam' | 'pet' | 'feed' | 'play' | 'fetch' | 'tug' | 'stopPlay' | 'talk' | 'inventory' | 'stats' | 'rename' | 'settings' | 'dashboard' | 'hide' | 'quit'
+export type MenuAction = 'roam' | 'pet' | 'feed' | 'play' | 'fetch' | 'tug' | 'stopPlay' | 'talk' | 'train' | 'inventory' | 'stats' | 'rename' | 'settings' | 'dashboard' | 'hide' | 'quit'
 
 interface Props {
   x: number
@@ -19,6 +19,7 @@ const ITEMS: { action: MenuAction; icon: string; label: string; hint?: string }[
   { action: 'fetch', icon: '🎾', label: 'Play fetch', hint: 'throw the ball' },
   { action: 'tug', icon: '🪢', label: 'Tug of war', hint: 'hold & pull' },
   { action: 'talk', icon: '💬', label: 'Talk' },
+  { action: 'train', icon: '🎓', label: 'Train', hint: 'voice commands' },
   { action: 'inventory', icon: '🎒', label: 'Inventory' },
   { action: 'stats', icon: '📊', label: 'Stats' },
   { action: 'rename', icon: '✏️', label: 'Rename' },

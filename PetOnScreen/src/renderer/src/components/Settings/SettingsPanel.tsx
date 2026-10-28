@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { AppSettings } from '@shared/types'
 import type { DashboardState } from '../Dashboard/DashboardApp'
+import { UpdateCard } from '../Dashboard/UpdateCard'
 
 const MODELS = [
   { id: 'claude-opus-5', label: 'Claude Opus 5 (default)' },
@@ -42,6 +43,8 @@ export function SettingsPanel({ state }: { state: DashboardState }): JSX.Element
         <Toggle label="Show pet" checked={s.petVisible} onChange={(v) => update({ petVisible: v })} />
       </div>
 
+      <UpdateCard settings={s} variant="card" />
+
       <div className="card">
         <h3>System</h3>
         <Toggle
@@ -63,6 +66,15 @@ export function SettingsPanel({ state }: { state: DashboardState }): JSX.Element
         <Row label="Volume" hint={`${Math.round(s.volume * 100)}%`}>
           <input type="range" min={0} max={1} step={0.05} value={s.volume} disabled={!s.soundEnabled} onChange={(e) => update({ volume: Number(e.target.value) })} />
         </Row>
+      </div>
+
+      <div className="card">
+        <h3>Voice commands</h3>
+        <Toggle label="Listen for commands" hint="Right-click the pet → Train to teach commands by voice" checked={s.voiceEnabled} onChange={(v) => update({ voiceEnabled: v })} />
+        <p className="muted small">
+          Speech is recognized on this computer by a small Whisper model (downloaded once, about 40 MB, then cached). Audio never leaves your machine and is discarded right after each phrase. Treats you give after a spoken command teach the pet your voice, so a trained pet
+          obeys you and not whoever else is in the room.
+        </p>
       </div>
 
       <div className="card">

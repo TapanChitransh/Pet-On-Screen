@@ -3,6 +3,7 @@ import { DEFAULT_STATS, type PetStats } from './PetStats'
 import { createMemory, type PetMemory } from './Memory'
 import { STARTER_INVENTORY, type Inventory } from './Items'
 import { SPECIES } from './Species'
+import { createTraining, normalizeTraining, type TrainingState } from './Commands'
 
 /** Serializable pet record. This is what gets persisted. */
 export interface PetSave {
@@ -13,6 +14,8 @@ export interface PetSave {
   stats: PetStats
   memory: PetMemory
   inventory: Inventory
+  /** commands the pet has been taught and what it knows about its owner's voice */
+  training: TrainingState
   createdAt: number
   lastSeenAt: number
 }
@@ -28,6 +31,7 @@ export function createPet(speciesId: string, name: string, rand: () => number, n
     stats: { ...DEFAULT_STATS },
     memory: createMemory(),
     inventory: { ...STARTER_INVENTORY },
+    training: createTraining(),
     createdAt: now,
     lastSeenAt: now
   }
@@ -50,6 +54,7 @@ export function normalizePet(raw: Partial<PetSave>): PetSave | null {
     personality: { ...base.personality, ...(raw.personality ?? {}) },
     stats: { ...base.stats, ...(raw.stats ?? {}) },
     memory,
-    inventory: { ...(raw.inventory ?? base.inventory) }
+    inventory: { ...(raw.inventory ?? base.inventory) },
+    training: normalizeTraining(raw.training)
   }
 }

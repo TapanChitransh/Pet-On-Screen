@@ -12,6 +12,8 @@ import { recordInteraction, rememberEvent, type InteractionType } from '@models/
 import { addItem, hasItem, ITEMS, removeItem } from '@models/Items'
 import { SPECIES, type SpeciesDefinition } from '@models/Species'
 import { ageInDays, type PetSave } from '@models/Pet'
+import { COMMANDS, parseUtterance, skillOf, type CommandId, type Speaker, type UtteranceKind } from '@models/Commands'
+import { enrollOwner, identifySpeaker } from '@engine/Voiceprint'
 import { createRng, type Rng } from './rng'
 import { BehaviorEngine } from './BehaviorEngine'
 import { MovementEngine, type Point } from './MovementEngine'
@@ -19,6 +21,7 @@ import { PersonalityEngine } from './PersonalityEngine'
 import { EventEngine, type EventFx, type TriggeredEvent } from './EventEngine'
 import { InteractionEngine, type InteractionContext, type Reaction } from './InteractionEngine'
 import { PlayEngine, type PlayDirective, type PlayEvent, type PlaySnapshot } from './PlayEngine'
+import { TrainingEngine, type Milestone, type TrainingContext } from './TrainingEngine'
 
 export interface EngineEnvironment {
   width: number
@@ -37,6 +40,28 @@ export type EngineEvent =
   | { type: 'itemFound'; itemId: string; gift: boolean }
   | { type: 'save' }
   | { type: 'notify'; text: string }
+  /** a command was reinforced by praise, a treat or a scold */
+  | { type: 'reinforced'; id: CommandId; by: 'praise' | 'treat' | 'scold'; level: number; milestone: Milestone }
+  /** a command skill crossed a milestone */
+  | { type: 'milestone'; id: CommandId; milestone: 'learning' | 'learned' }
+
+/** What came of something the user said (by voice or typed). */
+export interface CommandOutcome {
+  kind: UtteranceKind
+  id: CommandId | null
+  /** for commands: whether the pet did it */
+  obeyed: boolean | null
+  /** skill level of the command afterwards */
+  level: number | null
+  milestone: Milestone
+  /** the utterance as understood */
+  text: string
+  speaker: Speaker
+  /** a trained pet turned a stranger down */
+  refusedStranger: boolean
+  /** for treats: whether there was one to give */
+  treatGiven: boolean
+}
 
 export interface PetSnapshot {
   x: number
@@ -126,6 +151,7 @@ export class PetEngine {
   private personality = new PersonalityEngine()
   private events = new EventEngine()
   private interaction = new InteractionEngine()
+  private training = new TrainingEngine()
   private games: PlayEngine
 
   private activity: Activity
@@ -171,7 +197,7 @@ export class PetEngine {
   private listeners = new Set<(e: EngineEvent) => void>()
 
   constructor(pet: PetSave, env: EngineEnvironment, position: (Point & { perched?: boolean }) | null, rng: Rng = createRng(), nowMs = Date.now()) {
-    this.pet = { ...pet, stats: { ...pet.stats }, memory: { ...pet.memory }, inventory: { ...pet.inventory } }
+    this.pet = { ...pet, stats: { ...pet.stats }, memory: { ...pet.memory }, inventory: { ...pet.inventory }, training: { ...pet.training, commands: { ...pet.training.commands } } }
     this.species = SPECIES[pet.speciesId]
     if (!this.species) throw new Error(`Unknown species ${pet.speciesId}`)
     this.rng = rng
@@ -342,6 +368,10 @@ export class PetEngine {
 
   feed(foodId = 'kibble'): boolean {
     if (!hasItem(this.pet.inventory, foodId)) return false
+    if (foodId === 'treat') {
+      this.giveTreat()
+      return true
+    }
     const reaction = this.interaction.feed(this.interactionContext(), foodId, this.rng)
     if (reaction.state === 'EATING') {
       this.pet.inventory = removeItem(this.pet.inventory, foodId)
@@ -350,6 +380,153 @@ export class PetEngine {
     }
     this.interact('feed', reaction)
     return true
+  }
+
+  /**
+   * A treat is always eaten (pets are never too full for a treat). Given within 20 seconds of an
+   * obeyed command it is the strongest reinforcement there is. Returns the reinforced command, or
+   * null when there was no treat left or nothing recent to reinforce.
+   */
+  giveTreat(): CommandId | null {
+    if (!hasItem(this.pet.inventory, 'treat')) return null
+    this.pet.inventory = removeItem(this.pet.inventory, 'treat')
+    this.pet.memory.foodCounts = { ...this.pet.memory.foodCounts, treat: (this.pet.memory.foodCounts.treat ?? 0) + 1 }
+    const result = this.training.reward(this.trainingContext())
+    this.pet.training = result.training
+    const favorite = this.species.favoriteFoods.includes('treat')
+    const speech = result.id
+      ? this.rng.pick(['*crunch* I did that!', `treat for ${COMMANDS[result.id].label.toLowerCase()}! got it`, '*crunch crunch* again?', 'I am SO good'])
+      : this.rng.pick(['*crunch*', favorite ? 'MY FAVORITE!' : 'yum, treat!', '*happy crunching*'])
+    this.emit({ type: 'sound', name: 'eat' })
+    this.interact('feed', {
+      state: 'EATING',
+      movement: 'none',
+      duration: this.rng.range(2.5, 3.5),
+      speech,
+      fx: result.id || favorite ? 'sparkle' : null,
+      stats: { hunger: -ITEMS.treat.power, happiness: result.id ? 8 : 5, affection: result.id ? 3 : 1.5, experience: result.id ? 4 : 2 }
+    })
+    if (result.id) this.reinforced(result.id, 'treat', result.after, result.milestone)
+    return result.id
+  }
+
+  /* ------------------------------------------------------------- training */
+
+  /**
+   * The user said something, by voice or typed. Commands the pet knows are obeyed with a chance
+   * that grows with training; "good boy", "no" and "treat" reinforce. The speaker matters once
+   * the pet has learned its owner's voice (see Voiceprint): a trained pet ignores strangers.
+   */
+  command(text: string, speaker: Speaker = 'owner'): CommandOutcome {
+    const parsed = parseUtterance(text, this.pet.name)
+    const base: CommandOutcome = { kind: parsed.kind, id: null, obeyed: null, level: null, milestone: null, text: parsed.text, speaker, refusedStranger: false, treatGiven: false }
+    if (this.paused) return base
+    const ctx = this.trainingContext()
+    switch (parsed.kind) {
+      case 'command': {
+        const id = parsed.id!
+        const r = this.training.command(ctx, id, this.rng, speaker)
+        this.pet.training = r.training
+        this.pet.memory = recordInteraction(this.pet.memory, 'command', Date.now())
+        if (r.obeyed && id === 'fetch' && this.games.mode === 'none') {
+          this.pet.stats = this.applyStatDelta(this.pet.stats, r.reaction.stats)
+          this.startFetch()
+        } else {
+          if (r.obeyed && this.games.mode !== 'none') this.stopPlay()
+          if (r.obeyed) this.emit({ type: 'sound', name: id === 'speak' ? 'voice' : id === 'jump' ? 'jump' : 'happy' })
+          this.applyReaction(r.reaction)
+        }
+        if (r.milestone) this.milestone(id, r.milestone)
+        this.emit({ type: 'save' })
+        return { ...base, id, obeyed: r.obeyed, level: r.after, milestone: r.milestone, refusedStranger: r.refusedStranger }
+      }
+      case 'praise': {
+        // Praise from a stranger is just a nice noise.
+        if (speaker === 'stranger') {
+          this.applyReaction({ state: 'CURIOUS', movement: 'none', duration: 2, speech: this.rng.chance(0.5) ? '*tilts head*' : null, fx: null, stats: {} })
+          return base
+        }
+        const r = this.training.praise(ctx, this.rng)
+        this.pet.training = r.training
+        if (r.reaction) this.applyReaction(r.reaction)
+        this.emit({ type: 'sound', name: 'happy' })
+        if (r.id) this.reinforced(r.id, 'praise', r.after, r.milestone)
+        this.emit({ type: 'save' })
+        return { ...base, id: r.id, level: r.id ? r.after : null, milestone: r.milestone }
+      }
+      case 'scold': {
+        if (speaker === 'stranger') {
+          this.applyReaction({ state: 'WATCHING', movement: 'none', duration: 2, speech: this.rng.chance(0.5) ? '*unbothered*' : null, fx: null, stats: {}, faceViewer: true })
+          return base
+        }
+        const r = this.training.scold(ctx, this.rng)
+        this.pet.training = r.training
+        if (r.reaction) this.applyReaction(r.reaction)
+        this.emit({ type: 'sound', name: 'annoyed' })
+        if (r.id) this.reinforced(r.id, 'scold', r.after, r.milestone)
+        this.emit({ type: 'save' })
+        return { ...base, id: r.id, level: r.id ? r.after : null, milestone: r.milestone }
+      }
+      case 'treat': {
+        if (speaker === 'stranger') {
+          this.applyReaction({ state: 'CURIOUS', movement: 'none', duration: 2, speech: this.rng.pick(['*sniffs the air*', 'treat? from you?', '👀']), fx: 'question', stats: {} })
+          return base
+        }
+        if (!hasItem(this.pet.inventory, 'treat')) {
+          this.applyReaction({ state: 'CURIOUS', movement: 'none', duration: 2.5, speech: this.rng.pick(['*sniffs* ...no treat?', 'where is it?', '*checks your hands*']), fx: 'question', stats: {}, faceViewer: true })
+          return base
+        }
+        const id = this.giveTreat()
+        return { ...base, id, level: id ? skillOf(this.pet.training, id).level : null, treatGiven: true }
+      }
+      default:
+        return base
+    }
+  }
+
+  /**
+   * Add a voice sample to the owner's voiceprint. Called by the runtime with the embedding of the
+   * utterance the owner just rewarded with a treat: whoever hands out treats is the owner.
+   */
+  enrollOwnerVoice(embedding: number[]): void {
+    this.pet.training = { ...this.pet.training, owner: enrollOwner(this.pet.training.owner, embedding) }
+    this.emit({ type: 'save' })
+  }
+
+  /** Who is speaking, judged against the owner's voiceprint. 'unknown' until the pet has learned a voice. */
+  identifySpeaker(embedding: number[] | null): Speaker {
+    return identifySpeaker(this.pet.training.owner, embedding).speaker
+  }
+
+  private reinforced(id: CommandId, by: 'praise' | 'treat' | 'scold', level: number, milestone: Milestone): void {
+    this.emit({ type: 'reinforced', id, by, level, milestone })
+    if (milestone) this.milestone(id, milestone)
+  }
+
+  private milestone(id: CommandId, milestone: 'learning' | 'learned'): void {
+    const label = COMMANDS[id].label.toLowerCase()
+    if (milestone === 'learned') {
+      this.pet.memory = rememberEvent(this.pet.memory, 'trained', `Mastered "${label}"`, Date.now())
+      this.say(this.rng.pick([`I know "${label}" now!`, `${label}? easy.`, `*proud* ${label} = done`]), 4)
+      this.fx = 'sparkle'
+      this.fxKey++
+      this.emit({ type: 'sound', name: 'notify' })
+    } else {
+      this.pet.memory = rememberEvent(this.pet.memory, 'trained', `Started to understand "${label}"`, Date.now())
+    }
+    this.emit({ type: 'milestone', id, milestone })
+  }
+
+  private trainingContext(): TrainingContext {
+    return {
+      personality: this.pet.personality,
+      stats: this.pet.stats,
+      species: this.species,
+      currentState: this.activity.state,
+      training: this.pet.training,
+      nowMs: Date.now(),
+      ownerName: this.env.ownerName
+    }
   }
 
   play(): void {
@@ -969,7 +1146,7 @@ export class PetEngine {
 
   /** Serializable pet for persistence. */
   toSave(): PetSave {
-    return { ...this.pet, stats: { ...this.pet.stats }, memory: { ...this.pet.memory }, inventory: { ...this.pet.inventory }, lastSeenAt: Date.now() }
+    return { ...this.pet, stats: { ...this.pet.stats }, memory: { ...this.pet.memory }, inventory: { ...this.pet.inventory }, training: { ...this.pet.training, commands: { ...this.pet.training.commands } }, lastSeenAt: Date.now() }
   }
 
   /** Position as a fraction of the window, for persistence across resolutions. */

@@ -1,5 +1,8 @@
-import type { ActivityInfo, AppSettings, Bootstrap, CursorInfo, LiveSnapshot, PetCommand, SaveData, WindowBounds } from '@shared/types'
-import { PetEngine, SPRITE_HEIGHT, SPRITE_WIDTH, type PetSnapshot } from '@engine/PetEngine'
+import type { ActivityInfo, AppSettings, Bootstrap, CursorInfo, LiveSnapshot, PetCommand, SaveData, UpdateState, WindowBounds } from '@shared/types'
+import { PetEngine, SPRITE_HEIGHT, SPRITE_WIDTH, type CommandOutcome, type PetSnapshot } from '@engine/PetEngine'
+import { REINFORCE_WINDOW_S } from '@engine/TrainingEngine'
+import { parseUtterance, type Speaker } from '@models/Commands'
+import { VoiceService } from './VoiceService'
 import { createPet, type PetSave } from '@models/Pet'
 import { SPECIES } from '@models/Species'
 import { levelForExperience } from '@models/PetStats'
@@ -114,6 +117,15 @@ export class PetRuntime {
   bounds: WindowBounds
   readonly audio = new AudioService()
   readonly conversation = new ConversationService((req) => window.petApi.aiChat(req))
+  /** microphone + on-device speech recognition; idle unless settings.voiceEnabled */
+  readonly voice = new VoiceService(
+    (text, embedding) => this.heard(text, embedding),
+    () => this.emitVoice()
+  )
+  /** what the last thing the user said (voice or typed) came to; shown in the Train popover */
+  lastCommand: CommandOutcome | null = null
+  /** who the pet thinks said the last voice utterance */
+  lastSpeaker: Speaker = 'unknown'
   visual: VisualState
   snapshot: PetSnapshot
   version: string
@@ -137,6 +149,9 @@ export class PetRuntime {
   private cursor: CursorInfo | null = null
   private lastVisualKey = ''
   private panting = false
+  private voiceListeners = new Set<Listener>()
+  /** embedding of the most recent voice utterance, kept just long enough for a treat to claim it */
+  private lastVoice: { embedding: number[]; at: number } | null = null
 
   constructor(boot: Bootstrap) {
     this.settings = boot.settings
@@ -161,6 +176,7 @@ export class PetRuntime {
     window.petApi.setIgnoreMouse(true)
     if (!this.settings.petVisible) this.hiddenAt = Date.now()
     else this.start()
+    if (this.settings.voiceEnabled) void this.voice.start()
   }
 
   static async create(): Promise<PetRuntime> {
@@ -195,6 +211,17 @@ export class PetRuntime {
         case 'save':
           this.persist()
           break
+        case 'reinforced':
+          // A treat claims the voice that gave the rewarded command: that voice is the owner's.
+          if (e.by === 'treat' && this.lastVoice && Date.now() - this.lastVoice.at <= REINFORCE_WINDOW_S * 1000) {
+            engine.enrollOwnerVoice(this.lastVoice.embedding)
+            this.lastVoice = null
+          }
+          if (!this.lastCommand || this.lastCommand.kind !== 'treat') {
+            this.lastCommand = { kind: e.by === 'scold' ? 'scold' : e.by, id: e.id, obeyed: null, level: e.level, milestone: e.milestone, text: '', speaker: 'owner', refusedStranger: false, treatGiven: e.by === 'treat' }
+          }
+          this.emitVoice()
+          break
         default:
           break
       }
@@ -206,6 +233,9 @@ export class PetRuntime {
     this.persist()
     this.engine = this.buildEngine(pet)
     this.conversation.reset()
+    this.lastCommand = null
+    this.lastVoice = null
+    this.lastSpeaker = 'unknown'
     this.snapshot = this.engine.snapshot()
     this.applyFrame(this.snapshot, performance.now())
     this.updateVisual(this.snapshot, true)
@@ -242,7 +272,8 @@ export class PetRuntime {
         this.dashboardOpen = open
         if (open) this.pushLive(true)
       }),
-      api.on<void>('pet:surprise', () => this.engine.surprise())
+      api.on<void>('pet:surprise', () => this.engine.surprise()),
+      api.on<UpdateState>('update:state', (u) => this.onUpdateState(u))
     )
   }
 
@@ -257,11 +288,16 @@ export class PetRuntime {
       this.ignoringMouse = true
       this.syncMouse()
     }
+    if (prev.voiceEnabled !== s.voiceEnabled) {
+      if (s.voiceEnabled) void this.voice.start()
+      else this.voice.stop()
+    }
     this.updateVisual(this.snapshot, true)
   }
 
   dispose(): void {
     this.stop()
+    this.voice.stop()
     this.unsubscribers.forEach((u) => u())
     this.engineUnsub?.()
     delete window.__petFlush
@@ -851,7 +887,71 @@ export class PetRuntime {
     this.storage.flush()
   }
 
+  /* --------------------------------------------------------------- updates */
+
+  private announcedUpdate: string | null = null
+
+  /** The pet mentions a new version once per session; the dashboard has the details. */
+  private onUpdateState(u: UpdateState): void {
+    const v = u.latest?.version
+    if (!v || v === this.announcedUpdate) return
+    if (u.status === 'downloaded') {
+      this.announcedUpdate = v
+      this.engine.say(`psst, a new me is ready (v${v}) 🎁 restart when you like`, 8)
+      this.kick()
+    } else if (u.status === 'available' && !u.native) {
+      this.announcedUpdate = v
+      this.engine.say(`ooh, version ${v} is out! see the dashboard 🎁`, 8)
+      this.kick()
+    }
+  }
+
+  /* ----------------------------------------------------------------- voice */
+
+  subscribeVoice(listener: Listener): () => void {
+    this.voiceListeners.add(listener)
+    return () => this.voiceListeners.delete(listener)
+  }
+
+  private emitVoice(): void {
+    for (const l of this.voiceListeners) l()
+  }
+
+  /** Turn microphone listening on or off (persisted in settings). */
+  setVoice(on: boolean): void {
+    void window.petApi.updateSettings({ voiceEnabled: on })
+    if (on) void this.voice.start()
+    else this.voice.stop()
+  }
+
+  /**
+   * Something was said to the pet. Spoken utterances carry a voice embedding and are judged
+   * against the owner's voiceprint; typed ones come from the owner's own keyboard.
+   */
+  heard(text: string, embedding: number[] | null = null, spoken = embedding !== null): CommandOutcome {
+    const speaker: Speaker = spoken ? this.engine.identifySpeaker(embedding) : 'owner'
+    if (spoken) {
+      this.lastSpeaker = speaker
+      // A stranger's voice must never end up in the owner's voiceprint.
+      this.lastVoice = embedding && speaker !== 'stranger' ? { embedding, at: Date.now() } : null
+    }
+    const outcome = this.engine.command(text, speaker)
+    if (outcome.kind !== 'none' || spoken) this.lastCommand = outcome
+    if (outcome.kind !== 'none') {
+      this.persist()
+      this.kick()
+    }
+    this.emitVoice()
+    return outcome
+  }
+
   async talk(text: string): Promise<ConversationReply> {
+    // Commands typed into the chat are commands, not conversation.
+    const parsed = parseUtterance(text, this.engine.pet.name)
+    if (parsed.kind !== 'none') {
+      const outcome = this.heard(text, null, false)
+      return { text: describeOutcome(outcome, this.engine.pet.name), source: 'local' }
+    }
     this.engine.talk()
     const reply = await this.conversation.reply(
       text,
@@ -865,5 +965,22 @@ export class PetRuntime {
     this.audio.play('voice', this.engine.species)
     this.persist()
     return reply
+  }
+}
+
+/** The pet's one-line reply when a command was typed into the chat. */
+function describeOutcome(o: CommandOutcome, name: string): string {
+  switch (o.kind) {
+    case 'command':
+      if (o.refusedStranger) return `*${name} waits for its owner*`
+      return o.obeyed ? `*${name} does it*` : `*${name} is not sure what you mean yet* (keep practicing, and reward with treats)`
+    case 'praise':
+      return o.id ? '*happy wiggle* I did good!' : '*happy wiggle*'
+    case 'scold':
+      return o.id ? '*ears down* ...okay' : '*ears down*'
+    case 'treat':
+      return o.treatGiven ? (o.id ? '*crunch* I am learning!' : '*crunch*') : '*sniffs* ...no treats left. The pet finds more over time.'
+    default:
+      return '...'
   }
 }

@@ -1,5 +1,7 @@
-import { app, BrowserWindow, ipcMain, screen } from 'electron'
+import { app, BrowserWindow, ipcMain, screen, session, shell, systemPreferences } from 'electron'
+import { createHash } from 'crypto'
 import { mkdirSync, writeFileSync } from 'fs'
+import { readFile, rename, writeFile } from 'fs/promises'
 import { join } from 'path'
 import type { AiChatRequest, AppSettings, Bootstrap, CursorInfo, LiveSnapshot, PetCommand, SaveData, WindowBounds } from '@shared/types'
 import { Store } from './store'
@@ -7,6 +9,7 @@ import { ActivityMonitor } from './activity'
 import { AppTray } from './tray'
 import { ALWAYS_ON_TOP_LEVEL, createDashboardWindow, createPetWindow, describeDisplays, fitPetWindowToDisplay, resolveDisplay } from './windows'
 import { aiChat } from './ai'
+import { Updater } from './updater'
 
 /**
  * Dev capture mode: `PETONSCREEN_SHOT_DIR=<dir> electron .` runs an isolated copy of the app
@@ -28,6 +31,7 @@ let petWin: BrowserWindow | null = null
 let dashWin: BrowserWindow | null = null
 let tray: AppTray | null = null
 let store: Store
+let updater: Updater | null = null
 const activity = new ActivityMonitor()
 let cursorTimer: NodeJS.Timeout | null = null
 let lastCursor: CursorInfo | null = null
@@ -59,7 +63,7 @@ function activePetName(): string | null {
 }
 
 function refreshTray(): void {
-  tray?.refresh(store.getSettings(), describeDisplays(), activePetName())
+  tray?.refresh(store.getSettings(), describeDisplays(), activePetName(), updater?.state ?? null)
 }
 
 /** Surface renderer errors in the main process log (stderr) so they are visible from the terminal. */
@@ -166,6 +170,49 @@ function registerIpc(): void {
     const s = store.getSettings()
     return aiChat(s.aiApiKey, s.aiModel, req)
   })
+  ipcMain.handle('update:get', () => updater?.state ?? null)
+  ipcMain.handle('update:check', () => updater?.check() ?? null)
+  ipcMain.on('update:download', () => void updater?.download())
+  ipcMain.on('update:install', () => updater?.install())
+  ipcMain.on('update:open-release', () => updater?.openReleasePage())
+  ipcMain.on('shell:open-external', (_e, url: string) => {
+    if (/^https:\/\//.test(url)) void shell.openExternal(url)
+  })
+  ipcMain.handle('voice:request-microphone', async () => {
+    if (process.platform !== 'darwin') return true
+    if (systemPreferences.getMediaAccessStatus('microphone') === 'granted') return true
+    return systemPreferences.askForMediaAccess('microphone')
+  })
+  // Speech model cache: the renderer downloads the model once and keeps it here, so voice
+  // recognition works offline afterwards. Keys are URLs; files are named by their hash.
+  const modelDir = join(app.getPath('userData'), 'models')
+  const modelPath = (key: string): string => join(modelDir, createHash('sha1').update(key).digest('hex'))
+  ipcMain.handle('model-cache:get', async (_e, key: string) => {
+    try {
+      return await readFile(modelPath(key))
+    } catch {
+      return null
+    }
+  })
+  ipcMain.handle('model-cache:put', async (_e, key: string, data: Uint8Array) => {
+    mkdirSync(modelDir, { recursive: true })
+    const target = modelPath(key)
+    const tmp = `${target}.${process.pid}.tmp`
+    await writeFile(tmp, data)
+    await rename(tmp, target)
+  })
+}
+
+/** The pet window may use the microphone (for voice commands) and nothing else. */
+function registerPermissions(): void {
+  session.defaultSession.setPermissionRequestHandler((wc, permission, callback) => {
+    const fromPet = petWin !== null && !petWin.isDestroyed() && wc.id === petWin.webContents.id
+    callback(fromPet && permission === 'media' && store.getSettings().voiceEnabled)
+  })
+  session.defaultSession.setPermissionCheckHandler((wc, permission) => {
+    const fromPet = wc !== null && petWin !== null && !petWin.isDestroyed() && wc.id === petWin.webContents.id
+    return fromPet && permission === 'media'
+  })
 }
 
 function createPet(): void {
@@ -200,6 +247,8 @@ async function runDevShots(dir: string): Promise<void> {
   try {
     await sleep(3500)
     await shoot(petWin, 'pet')
+    // PETONSCREEN_UPDATE_FROM=<older version> makes the dashboard shots show the update banner and card.
+    if (process.env['PETONSCREEN_UPDATE_FROM']) console.log(`[devshot] update check: ${JSON.stringify((await updater?.check())?.status)}`)
     openDashboard('pets', true)
     await sleep(2500)
     // A hidden window repaints unreliably for capturePage, so show it without taking focus.
@@ -210,6 +259,11 @@ async function runDevShots(dir: string): Promise<void> {
       dashWin?.webContents.send('dashboard:tab', tab)
       await sleep(1000)
       await shoot(dashWin, `dashboard-${tab}`)
+      if (tab === 'settings') {
+        await dashWin?.webContents.executeJavaScript(`document.querySelector('.update-card')?.scrollIntoView({ block: 'start' })`, true)
+        await sleep(500)
+        await shoot(dashWin, 'dashboard-updates')
+      }
     }
     dashWin?.hide()
     // Exercise a few interactions through the real command path and capture the result.
@@ -219,6 +273,27 @@ async function runDevShots(dir: string): Promise<void> {
     sendToPet('pet:surprise')
     await sleep(900)
     await shoot(petWin, 'pet-event')
+    // Training: open the real right-click menu, pick Train, type a command, give a treat.
+    {
+      const js = (code: string): Promise<unknown> => petWin?.webContents.executeJavaScript(code, true) ?? Promise.resolve()
+      const [px, py] = JSON.parse((await js(`JSON.stringify([Math.round(window.__petRuntime.snapshot.x), Math.round(window.__petRuntime.snapshot.y - 50 * window.__petRuntime.settings.petScale)])`)) as string) as [number, number]
+      petWin?.webContents.sendInputEvent({ type: 'mouseMove', x: px, y: py })
+      await sleep(150)
+      petWin?.webContents.sendInputEvent({ type: 'mouseDown', x: px, y: py, button: 'right', clickCount: 1 })
+      petWin?.webContents.sendInputEvent({ type: 'mouseUp', x: px, y: py, button: 'right', clickCount: 1 })
+      await sleep(400)
+      const opened = await js(`(() => { const b = [...document.querySelectorAll('.menu-item')].find((el) => el.textContent.includes('Train')); if (b) b.click(); return !!b })()`)
+      console.log(`[devshot] train menu item clicked: ${opened}`)
+      await sleep(500)
+      await shoot(petWin, 'train-popover')
+      await js(`(() => { const r = window.__petRuntime; r.engine.pet.training.commands.sit = { level: 100, heard: 12, obeyed: 11, lastAt: null }; return JSON.stringify(r.heard('Max, sit!')) })()`).then((o) => console.log(`[devshot] heard sit -> ${o}`))
+      await sleep(600)
+      await js(`JSON.stringify(window.__petRuntime.heard('treat'))`).then((o) => console.log(`[devshot] treat -> ${o}`))
+      await sleep(600)
+      await shoot(petWin, 'train-popover-treat')
+      await js(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`)
+      await sleep(300)
+    }
     // One capture per species, adopted through the real command path.
     const { SPECIES_LIST } = await import('@models/Species')
     for (const s of SPECIES_LIST) {
@@ -294,14 +369,24 @@ app.whenReady().then(() => {
   store = new Store()
   if (isMac) app.dock?.hide()
   registerIpc()
+  registerPermissions()
   createPet()
   tray = new AppTray({
     updateSettings: (patch) => applySettings(patch),
     openDashboard: (tab) => openDashboard(tab),
     surprise: () => sendToPet('pet:surprise'),
-    quit: () => app.quit()
+    quit: () => app.quit(),
+    installUpdate: () => updater?.install()
   })
   refreshTray()
+  updater = new Updater({
+    autoDownload: () => store.getSettings().autoUpdate,
+    onState: (state) => {
+      broadcast('update:state', state)
+      refreshTray()
+    }
+  })
+  if (!SHOT_DIR && !process.env['PETONSCREEN_PERF'] && !process.env['PETONSCREEN_PLAYTEST']) updater.start()
   activity.start((info) => sendToPet('activity', info))
   screen.on('display-added', onDisplaysChanged)
   screen.on('display-removed', onDisplaysChanged)
@@ -486,6 +571,7 @@ app.on('before-quit', (e) => {
       store.flush()
       flushed = true
       activity.stop()
+      updater?.stop()
       if (cursorTimer) clearInterval(cursorTimer)
       tray?.destroy()
       app.quit()

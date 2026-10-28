@@ -7,7 +7,9 @@
   "license": "MIT",
   "private": true,
   "scripts": {
+    "predev": "node scripts/sync-ort.mjs",
     "dev": "electron-vite dev",
+    "prebuild": "node scripts/sync-ort.mjs",
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
@@ -20,6 +22,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.124.0",
+    "@huggingface/transformers": "^3.8.1",
+    "electron-updater": "^6.8.11",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
@@ -99,6 +103,12 @@
     },
     "linux": {
       "target": "AppImage"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "TapanChitransh",
+      "repo": "Pet-On-Screen",
+      "releaseType": "release"
     }
   }
 }

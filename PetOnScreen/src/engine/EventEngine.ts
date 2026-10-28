@@ -57,7 +57,7 @@ export const EVENTS: SpontaneousEvent[] = [
     duration: [5, 8],
     speech: ['ooh, what is this?', 'found something!', '*digs*'],
     fx: 'question',
-    items: ['shiny', 'leaf', 'sock', 'flower'],
+    items: ['shiny', 'leaf', 'sock', 'flower', 'treat', 'treat'],
     stats: { happiness: 4, experience: 4 }
   },
   {

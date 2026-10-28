@@ -1,5 +1,5 @@
 import { app, Menu, Tray, type MenuItemConstructorOptions } from 'electron'
-import type { AppSettings, DisplayInfo } from '@shared/types'
+import type { AppSettings, DisplayInfo, UpdateState } from '@shared/types'
 import { createTrayIcon } from './icon'
 
 export interface TrayActions {
@@ -7,6 +7,7 @@ export interface TrayActions {
   openDashboard: (tab?: string) => void
   surprise: () => void
   quit: () => void
+  installUpdate: () => void
 }
 
 const SIZES: { label: string; value: number }[] = [
@@ -27,11 +28,18 @@ export class AppTray {
     if (process.platform !== 'darwin') this.tray.on('double-click', () => actions.openDashboard())
   }
 
-  refresh(settings: AppSettings, displays: DisplayInfo[], petName: string | null): void {
+  refresh(settings: AppSettings, displays: DisplayInfo[], petName: string | null, update: UpdateState | null = null): void {
     const a = this.actions
+    const updateItems: MenuItemConstructorOptions[] = []
+    if (update?.status === 'downloaded' && update.latest) {
+      updateItems.push({ label: `🎁 Restart to update to ${update.latest.version}`, click: () => a.installUpdate() }, { type: 'separator' })
+    } else if (update?.status === 'available' && update.latest) {
+      updateItems.push({ label: `🎁 Version ${update.latest.version} is available…`, click: () => a.openDashboard('settings') }, { type: 'separator' })
+    }
     const template: MenuItemConstructorOptions[] = [
       { label: petName ? `🐾 ${petName}` : '🐾 PetOnScreen', enabled: false },
       { type: 'separator' },
+      ...updateItems,
       { label: 'Open Dashboard', click: () => a.openDashboard() },
       { label: settings.petVisible ? 'Hide Pet' : 'Show Pet', click: () => a.updateSettings({ petVisible: !settings.petVisible }) },
       { label: 'Pause Pet', type: 'checkbox', checked: settings.paused, click: () => a.updateSettings({ paused: !settings.paused }) },
